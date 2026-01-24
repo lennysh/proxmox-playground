@@ -1,0 +1,68 @@
+#!/bin/bash
+# ProxMox Scripts Repository - DO NOT RUN THIS FILE
+# This is a template reference for shell syntax in .gitignore
+
+# .gitignore for lennysh-proxmox-scripts
+
+# Backup files
+*.backup
+*.bak
+*.backup_*
+backup/
+backups/
+
+# Configuration backups
+*.conf.backup
+*.conf.backup_*
+**/conf.backup*
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.tmp/
+
+# System files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+
+# ProxMox specific
+/etc/pve/
+*.key
+*.crt
+*.pem
+
+# Logs
+*.log
+logs/
+*.pid
+
+# Environment
+.env
+.env.local
+secrets/
+
+# Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Testing
+.test/
+test-results/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
