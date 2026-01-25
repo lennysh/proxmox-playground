@@ -157,7 +157,7 @@ parse_config() {
     local entries_count=0
     
     while IFS= read -r line || [[ -n "$line" ]]; do
-        ((line_num++))
+        ((line_num++)) || true
         
         # Skip empty lines and comments
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
@@ -173,7 +173,7 @@ parse_config() {
         
         # Store entry
         ENTRIES[$entries_count]="$container_id|$pool|$zvol_name|$size|$notes"
-        ((entries_count++))
+        ((entries_count++)) || true
         
     done < "$CONFIG_FILE"
     
@@ -249,9 +249,9 @@ process_entries() {
         IFS='|' read -r container_id pool zvol_name size notes <<< "${ENTRIES[$i]}"
         
         if run_entry_setup $((i + 1)) "$container_id" "$pool" "$zvol_name" "$size"; then
-            ((success_count++))
+            ((success_count++)) || true
         else
-            ((failed_count++))
+            ((failed_count++)) || true
             if [[ "$SKIP_CONFIRMATION" != true ]]; then
                 read -p "Continue with remaining entries? (y/n) " -n 1 -r
                 echo

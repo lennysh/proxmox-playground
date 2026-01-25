@@ -203,7 +203,7 @@ create_zvol() {
         while [[ ! -e "$zvol_dev" ]] && [[ $attempt -lt $max_attempts ]]; do
             verbose "Waiting for device $zvol_dev to appear... (attempt $((attempt + 1))/$max_attempts)"
             sleep 1
-            ((attempt++))
+            ((attempt++)) || true
         done
         
         if [[ ! -e "$zvol_dev" ]]; then
@@ -301,7 +301,7 @@ add_mountpoint_to_lxc() {
     # Find next available mountpoint index
     local next_index=0
     while grep -q "^mp$next_index:" "$container_conf" 2>/dev/null; do
-        ((next_index++))
+        ((next_index++)) || true
     done
     
     # Create backup
