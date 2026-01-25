@@ -6,19 +6,19 @@ A collection of useful bash scripts and utilities for ProxMox administration.
 
 ```
 lennysh-proxmox-scripts/
-├── README.md                    # This file
-├── docs/                        # Root-level documentation
-│   ├── FILE_INDEX.md           # Navigation guide
-│   └── PROJECT_SUMMARY.md      # Overall project info
-└── docker-zvol/                # Docker Storage Management
-    ├── README.md               # Docker-zvol specific docs
-    ├── scripts/                # Executable scripts
+├── README.md                           # This file
+├── docs/                               # Root-level documentation
+│   ├── FILE_INDEX.md                   # Navigation guide
+│   └── PROJECT_SUMMARY.md              # Overall project info
+└── docker-zvol/                        # Docker Storage Management
+    ├── README.md                       # Docker-zvol specific docs
+    ├── scripts/                        # Executable scripts
     │   ├── setup-docker-zvol.sh
     │   ├── manage-docker-zvols.sh
     │   └── zvol-utilities.sh
-    ├── examples/               # Configuration templates
+    ├── examples/                       # Configuration templates
     │   └── docker-zvols.conf
-    └── docs/                   # Docker-zvol documentation
+    └── docs/                           # Docker-zvol documentation
         ├── DOCKER_ZVOL_MANAGEMENT.md
         └── QUICK_REFERENCE.sh
 ```
