@@ -21,6 +21,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Trap to show helpful message on unexpected exit
+trap 'echo -e "\n${RED}[ERROR]${NC} Script failed unexpectedly at line $LINENO. Check the error message above." >&2' ERR
+
 # Script variables
 CONTAINER_ID=""
 POOL=""
@@ -91,7 +94,10 @@ run_cmd() {
     if [[ "$DRY_RUN" == true ]]; then
         echo -e "${YELLOW}[DRY-RUN]${NC} Would execute: $cmd"
     else
-        eval "$cmd"
+        if ! eval "$cmd"; then
+            print_error "Command failed: $cmd"
+            return 1
+        fi
     fi
 }
 
