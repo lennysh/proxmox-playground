@@ -10,17 +10,21 @@ lennysh-proxmox-scripts/
 ├── docs/                               # Root-level documentation
 │   ├── FILE_INDEX.md                   # Navigation guide
 │   └── PROJECT_SUMMARY.md              # Overall project info
-└── docker-zvol/                        # Docker Storage Management
-    ├── README.md                       # Docker-zvol specific docs
-    ├── scripts/                        # Executable scripts
-    │   ├── setup-docker-zvol.sh
-    │   ├── manage-docker-zvols.sh
-    │   └── zvol-utilities.sh
-    ├── examples/                       # Configuration templates
-    │   └── docker-zvols.conf
-    └── docs/                           # Docker-zvol documentation
-        ├── DOCKER_ZVOL_MANAGEMENT.md
-        └── QUICK_REFERENCE.sh
+├── docker-zvol/                        # Docker Storage Management
+│   ├── README.md                       # Docker-zvol specific docs
+│   ├── scripts/                        # Executable scripts
+│   │   ├── setup-docker-zvol.sh
+│   │   ├── manage-docker-zvols.sh
+│   │   └── zvol-utilities.sh
+│   ├── examples/                       # Configuration templates
+│   │   └── docker-zvols.conf
+│   └── docs/                           # Docker-zvol documentation
+│       ├── DOCKER_ZVOL_MANAGEMENT.md
+│       └── QUICK_REFERENCE.sh
+└── vm-import/                          # VM Disk Import
+    ├── README.md                       # VM-import docs
+    └── scripts/
+        └── import-qcow2-zfs.sh         # Import qcow2 to ZFS
 ```
 
 ## 🚀 Quick Start
@@ -42,6 +46,21 @@ sudo ./scripts/zvol-utilities.sh monitor rpool 5
 ```
 
 See [docker-zvol/README.md](docker-zvol/README.md) for complete documentation.
+
+### VM Import (QCOW2 to ZFS)
+Import qcow2 disk images into Proxmox VMs on ZFS storage:
+
+```bash
+cd vm-import
+
+# Import to VM 100
+sudo ./scripts/import-qcow2-zfs.sh -v 100 -i /path/to/disk.qcow2
+
+# Import and set as boot disk
+sudo ./scripts/import-qcow2-zfs.sh -v 101 -i ./debian.qcow2 --boot
+```
+
+See [vm-import/README.md](vm-import/README.md) for complete documentation.
 
 ## 📚 Collections
 
@@ -66,6 +85,24 @@ Automate creation and management of ZFS zvols for Docker storage in LXC containe
 - [Docker-zvol README](docker-zvol/README.md) - Overview and quick start
 - [DOCKER_ZVOL_MANAGEMENT.md](docker-zvol/docs/DOCKER_ZVOL_MANAGEMENT.md) - Technical guide
 - [QUICK_REFERENCE.sh](docker-zvol/docs/QUICK_REFERENCE.sh) - Command reference
+
+### [vm-import](vm-import/) - VM Disk Import
+Import qcow2/raw/vmdk disk images into Proxmox VMs on ZFS storage.
+
+**Includes:**
+- import-qcow2-zfs.sh - Import disk images to ZFS-backed VMs
+- Dry-run mode and validation
+- Optional VM creation
+- Boot disk configuration
+
+**Key Features:**
+- ✅ QCOW2, raw, and VMDK support
+- ✅ Automatic ZFS zvol creation
+- ✅ Disk bus selection (SCSI, SATA, VirtIO)
+- ✅ Safety checks and confirmations
+
+**Documentation:**
+- [vm-import/README.md](vm-import/README.md) - Overview and usage
 
 ### Future Collections
 More script collections will be added for:
@@ -115,12 +152,21 @@ cd docker-zvol
 sudo ./scripts/zvol-utilities.sh expand 100 rpool docker_app1 100G
 ```
 
+**Import qcow2 disk to VM:**
+```bash
+cd vm-import
+sudo ./scripts/import-qcow2-zfs.sh -v 100 -i /path/to/disk.qcow2
+```
+
 **Get help:**
 ```bash
 cd docker-zvol
 ./scripts/setup-docker-zvol.sh -h
 ./scripts/manage-docker-zvols.sh -h
 ./scripts/zvol-utilities.sh help
+
+cd vm-import
+./scripts/import-qcow2-zfs.sh -h
 ```
 
 ## 🔧 Requirements
