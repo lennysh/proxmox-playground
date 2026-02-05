@@ -32,7 +32,6 @@ DRY_RUN=false
 VERBOSE=false
 SKIP_CONFIRM=false
 FORMAT="qcow2"
-DISK_BUS="scsi"
 SET_BOOT=false
 
 ################################################################################
@@ -53,7 +52,6 @@ Optional arguments:
   -s, --storage        ZFS storage name (default: local-zfs)
                        Use 'pvesm status' to list available storage
   -f, --format         Source image format: qcow2, raw, vmdk (default: qcow2)
-  -b, --bus            Disk bus: scsi, sata, virtio (default: scsi)
   --boot               Set imported disk as boot device
   -d, --dry-run        Show what would be done without making changes
   -y, --yes            Skip confirmation prompts
@@ -135,12 +133,6 @@ validate_args() {
     # Validate format
     if ! [[ "$FORMAT" =~ ^(qcow2|raw|vmdk)$ ]]; then
         print_error "Format must be qcow2, raw, or vmdk"
-        exit 1
-    fi
-
-    # Validate bus
-    if ! [[ "$DISK_BUS" =~ ^(scsi|sata|virtio)$ ]]; then
-        print_error "Bus must be scsi, sata, or virtio"
         exit 1
     fi
 }
@@ -261,55 +253,17 @@ check_vm_stopped() {
 # Import Functions
 ################################################################################
 
-get_next_disk_slot() {
-    local vm_config
-    vm_config=$(qm config "$VMID" 2>/dev/null || echo "")
-
-    case "$DISK_BUS" in
-        scsi)
-            for i in {0..30}; do
-                if ! echo "$vm_config" | grep -q "^${DISK_BUS}${i}:"; then
-                    echo "${DISK_BUS}${i}"
-                    return
-                fi
-            done
-            ;;
-        sata)
-            for i in {0..5}; do
-                if ! echo "$vm_config" | grep -q "^${DISK_BUS}${i}:"; then
-                    echo "${DISK_BUS}${i}"
-                    return
-                fi
-            done
-            ;;
-        virtio)
-            for i in {0..15}; do
-                if ! echo "$vm_config" | grep -q "^${DISK_BUS}${i}:"; then
-                    echo "${DISK_BUS}${i}"
-                    return
-                fi
-            done
-            ;;
-    esac
-    echo ""
-}
-
 do_import() {
-    # Get next available disk slot (qm importdisk can assign via --disk)
-    local disk_id
-    disk_id=$(get_next_disk_slot)
+    # Capture disk config before import (to detect newly added disk for --boot)
+    local config_before
+    config_before=$(qm config "$VMID" 2>/dev/null | grep -E "^(scsi|sata|virtio)[0-9]+:" || true)
 
-    if [[ -z "$disk_id" ]]; then
-        print_error "No free disk slot found for bus $DISK_BUS"
-        exit 1
-    fi
-
-    print_info "Importing $QCOW2_FILE to VM $VMID on storage $STORAGE (as $disk_id)..."
+    print_info "Importing $QCOW2_FILE to VM $VMID on storage $STORAGE..."
     print_info "This may take several minutes depending on image size..."
 
     # qm importdisk creates ZFS zvol and adds disk to VM config
-    # --disk ensures we control the slot assignment
-    run_cmd "qm importdisk $VMID '$QCOW2_FILE' $STORAGE --format $FORMAT --disk $disk_id"
+    # Note: --disk option not supported on all Proxmox versions
+    run_cmd "qm importdisk $VMID '$QCOW2_FILE' $STORAGE --format $FORMAT"
 
     if [[ "$DRY_RUN" == true ]]; then
         print_info "Dry-run complete. Run without -d to perform actual import."
@@ -317,9 +271,22 @@ do_import() {
     fi
 
     if [[ "$SET_BOOT" == true ]]; then
-        print_info "Setting $disk_id as boot device..."
-        run_cmd "qm set $VMID --boot order=$disk_id"
-        print_success "Boot order updated"
+        # Find the newly added disk by comparing config before/after
+        local config_after
+        config_after=$(qm config "$VMID" 2>/dev/null | grep -E "^(scsi|sata|virtio)[0-9]+:" || true)
+        local new_disk
+        new_disk=$(echo "$config_after" | while read -r line; do
+            local disk_id="${line%%:*}"
+            echo "$config_before" | grep -q "^${disk_id}:" || echo "$disk_id"
+        done | head -1)
+
+        if [[ -n "$new_disk" ]]; then
+            print_info "Setting $new_disk as boot device..."
+            run_cmd "qm set $VMID --boot order=$new_disk"
+            print_success "Boot order updated"
+        else
+            print_warning "Could not detect newly imported disk for boot order. Set manually: qm set $VMID --boot order=<disk>"
+        fi
     fi
 }
 
@@ -344,10 +311,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -f|--format)
             FORMAT="$2"
-            shift 2
-            ;;
-        -b|--bus)
-            DISK_BUS="$2"
             shift 2
             ;;
         --boot)

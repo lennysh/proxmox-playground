@@ -98,7 +98,7 @@ Import qcow2/raw/vmdk disk images into Proxmox VMs on ZFS storage.
 **Key Features:**
 - ✅ QCOW2, raw, and VMDK support
 - ✅ Automatic ZFS zvol creation
-- ✅ Disk bus selection (SCSI, SATA, VirtIO)
+- ✅ Automatic disk attachment
 - ✅ Safety checks and confirmations
 
 **Documentation:**

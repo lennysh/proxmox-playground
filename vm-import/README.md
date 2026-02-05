@@ -44,7 +44,6 @@ Imports a qcow2 (or raw/vmdk) disk image into a Proxmox VM on ZFS storage.
 **Optional arguments:**
 - `-s, --storage` - ZFS storage name (default: `local-zfs`)
 - `-f, --format` - Source format: qcow2, raw, vmdk (default: qcow2)
-- `-b, --bus` - Disk bus: scsi, sata, virtio (default: scsi)
 - `--boot` - Set imported disk as boot device
 - `-d, --dry-run` - Preview without making changes
 - `-y, --yes` - Skip confirmation prompts
