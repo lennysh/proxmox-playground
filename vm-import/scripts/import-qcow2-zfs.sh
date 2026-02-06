@@ -255,8 +255,10 @@ check_vm_stopped() {
 
 do_import() {
     # Capture disk config before import (to detect newly added disk for --boot)
+    # Include unused* since qm importdisk may add disk as unused0 on some Proxmox versions
+    local disk_pattern="^(scsi|sata|virtio|unused)[0-9]+:"
     local config_before
-    config_before=$(qm config "$VMID" 2>/dev/null | grep -E "^(scsi|sata|virtio)[0-9]+:" || true)
+    config_before=$(qm config "$VMID" 2>/dev/null | grep -E "$disk_pattern" || true)
 
     print_info "Importing $QCOW2_FILE to VM $VMID on storage $STORAGE..."
     print_info "This may take several minutes depending on image size..."
@@ -273,16 +275,44 @@ do_import() {
     if [[ "$SET_BOOT" == true ]]; then
         # Find the newly added disk by comparing config before/after
         local config_after
-        config_after=$(qm config "$VMID" 2>/dev/null | grep -E "^(scsi|sata|virtio)[0-9]+:" || true)
-        local new_disk
-        new_disk=$(echo "$config_after" | while read -r line; do
+        config_after=$(qm config "$VMID" 2>/dev/null | grep -E "$disk_pattern" || true)
+        local new_disk_id=""
+        local new_disk_path=""
+        while read -r line; do
             local disk_id="${line%%:*}"
-            echo "$config_before" | grep -q "^${disk_id}:" || echo "$disk_id"
-        done | head -1)
+            local disk_path
+            disk_path=$(echo "$line" | sed -n "s/^${disk_id}:[[:space:]]*//p")
+            if ! echo "$config_before" | grep -q "^${disk_id}:"; then
+                new_disk_id="$disk_id"
+                new_disk_path="$disk_path"
+                break
+            fi
+        done <<< "$config_after"
 
-        if [[ -n "$new_disk" ]]; then
-            print_info "Setting $new_disk as boot device..."
-            run_cmd "qm set $VMID --boot order=$new_disk"
+        if [[ -n "$new_disk_id" ]]; then
+            local boot_disk="$new_disk_id"
+            # If disk was added as unused*, attach it to scsi0 for bootability
+            if [[ "$new_disk_id" =~ ^unused[0-9]+$ ]] && [[ -n "$new_disk_path" ]]; then
+                # Find next free scsi slot
+                local scsi_slot=""
+                for i in {0..30}; do
+                    if ! qm config "$VMID" 2>/dev/null | grep -q "^scsi${i}:"; then
+                        scsi_slot="scsi${i}"
+                        break
+                    fi
+                done
+                if [[ -n "$scsi_slot" ]]; then
+                    print_info "Attaching disk to $scsi_slot and setting as boot device..."
+                    run_cmd "qm set $VMID --$scsi_slot $new_disk_path"
+                    run_cmd "qm set $VMID --delete $new_disk_id"
+                    boot_disk="$scsi_slot"
+                else
+                    print_warning "No free SCSI slot; trying unused0 for boot..."
+                fi
+            else
+                print_info "Setting $new_disk_id as boot device..."
+            fi
+            run_cmd "qm set $VMID --boot order=$boot_disk"
             print_success "Boot order updated"
         else
             print_warning "Could not detect newly imported disk for boot order. Set manually: qm set $VMID --boot order=<disk>"
