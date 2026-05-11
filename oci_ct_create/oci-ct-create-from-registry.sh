@@ -428,12 +428,22 @@ next_cluster_id() {
   printf '%s\n' "$id"
 }
 
+# Strip accidental JSON/string junk from a parsed UPID (pvesh often embeds UPID in quoted JSON).
+clean_parsed_upid() {
+  local u="${1//$'\r'/}"
+  u="${u#\"}"
+  u="${u%\"}"
+  u="${u%,}"
+  printf '%s\n' "$u"
+}
+
 # pvesh create sometimes prints a bare UPID line or mixes stderr; avoid jq on non-JSON.
 parse_upid_from_create_response() {
   local raw="$1" upid
-  upid=$(printf '%s\n' "$raw" | grep -oE 'UPID:[^[:space:]]+' | tail -1)
+  # Do not use [^[:space:]]+ here: a closing JSON " is not whitespace and would be captured.
+  upid=$(printf '%s\n' "$raw" | grep -oE 'UPID:[^"[:space:]]+' | tail -1)
   if [[ -n "$upid" ]]; then
-    printf '%s\n' "$upid"
+    clean_parsed_upid "$upid"
     return 0
   fi
   upid=$(printf '%s\n' "$raw" | jq -r '
@@ -444,7 +454,7 @@ parse_upid_from_create_response() {
     ) catch empty
   ' 2>/dev/null) || true
   if [[ -n "$upid" && "$upid" != "null" ]]; then
-    printf '%s\n' "$upid"
+    clean_parsed_upid "$upid"
     return 0
   fi
   while IFS= read -r line || [[ -n "${line:-}" ]]; do
@@ -458,7 +468,7 @@ parse_upid_from_create_response() {
       ) catch empty
     ' 2>/dev/null) || true
     if [[ -n "$upid" && "$upid" != "null" ]]; then
-      printf '%s\n' "$upid"
+      clean_parsed_upid "$upid"
       return 0
     fi
   done <<< "$(printf '%s\n' "$raw")"
