@@ -21,10 +21,14 @@ lennysh-proxmox-scripts/
 │   └── docs/                           # Docker-zvol documentation
 │       ├── DOCKER_ZVOL_MANAGEMENT.md
 │       └── QUICK_REFERENCE.sh
-└── vm-import/                          # VM Disk Import
-    ├── README.md                       # VM-import docs
-    └── scripts/
-        └── import-qcow2-zfs.sh         # Import qcow2 to ZFS
+├── vm-import/                          # VM Disk Import
+│   ├── README.md                       # VM-import docs
+│   └── scripts/
+│       └── import-qcow2-zfs.sh         # Import qcow2 to ZFS
+└── backup-summary/                     # vzdump log summaries
+    ├── README.md
+    ├── scripts/summarize-vzdump-log.sh
+    └── example-logs/                   # sample task logs
 ```
 
 ## 🚀 Quick Start
