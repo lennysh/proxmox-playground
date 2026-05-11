@@ -59,6 +59,17 @@ Template-only download (no CT):
 - **`STORAGE`** must allow LXC rootdir-style volumes (same classes of storage you use for **`--rootfs`**).
 - **`GiB`** is a plain integer in gibibytes, matching **`pct create`** expectations for new volumes (not a `32G` suffix string).
 - **`/path`** is the **guest** mount point (must be absolute). Proxmox creates the mount point entries **`mp0`**, **`mp1`**, … automatically.
+- **`SIZE`** may be an integer or a decimal (e.g. **`0.25`** GiB), as long as **`pct create`** accepts it for that storage backend.
+
+## ZFS / pool storage and “no path”
+
+If Perl prints **`storage definition has no path`** when resolving the vztmpl directory, that usually means the template storage is **not** a simple directory backend (e.g. it is a **ZFS** pool, LVM-thin, RBD, …). That is **normal**: there is no single host path to `test -f` the `.tar`.
+
+Current script behaviour:
+
+- It **does not abort** anymore; it lists **`/nodes/<node>/storage/<storage>/content`** until **`STORAGE:vztmpl/<normalized>.tar`** appears (after **`oci-registry-pull`**), then runs **`pct create`** with that volid.
+
+**Note:** Proxmox’s **`oci-registry-pull`** API itself may still require a **file-backed** storage with a **`path`** in some versions. If **`pvesh create … oci-registry-pull`** fails for a ZFS-only template store, use a **dir/NFS** storage for **vztmpl** in the UI (or a second storage id) for pulls, or pull where the UI allows it.
 
 ## Implementation notes
 

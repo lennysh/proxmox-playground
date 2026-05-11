@@ -33,8 +33,9 @@ Common options:
   --onboot 0|1          pct --onboot (default: 0)
 
 Additional volumes (mount points inside the CT; new disks on STORAGE):
-  --mp SPEC             Repeatable. SPEC = STORAGE:GiB:/path  (e.g. --mp local-zfs:32:/var/lib/data)
-                        → pct --mp0 STORAGE:GiB,mp=/path  (mp1, mp2, … in order)
+  --mp SPEC             Repeatable. SPEC = STORAGE:SIZE:/path  (e.g. --mp local-zfs:32:/var/lib/data)
+                        SIZE = GiB as integer or decimal (e.g. 8, 0.25) passed through to pct
+                        → pct --mp0 STORAGE:SIZE,mp=/path  (mp1, mp2, … in order)
 
 Pull behaviour:
   --skip-pull           Do not call oci-registry-pull; use an already-downloaded template
@@ -148,10 +149,41 @@ strip_oci_scheme() {
 
 REFERENCE="$(strip_oci_scheme "$REFERENCE")"
 
-vztmpl_dir_for_storage() {
-  local sid="$1"
-  perl -MPVE::Storage -e 'print PVE::Storage::get_vztmpl_dir(PVE::Storage::config(), $ARGV[0]) . "\n"' "$sid" \
-    || die "Could not resolve vztmpl directory for storage '$sid' (perl PVE::Storage failed — run on a PVE node?)"
+# Host path under vztmpl exists only for storages with a directory-style layout (e.g. "dir", some NFS).
+# ZFS pools, LVM-thin, RBD, etc. return "storage definition has no path" from get_vztmpl_dir — that is normal.
+vztmpl_host_dir_for_storage() {
+  local sid="$1" out
+  out="$(perl -MPVE::Storage -e 'print PVE::Storage::get_vztmpl_dir(PVE::Storage::config(), $ARGV[0]) . "\n"' "$sid" 2>/dev/null)" || return 1
+  out="${out//$'\r'/}"
+  out="${out//$'\n'/}"
+  [[ -n "$out" && -d "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+# True if vztmpl volume id exists on this storage (works when there is no single host path).
+storage_has_ostemplate_volid() {
+  local json want="${STORAGE}:vztmpl/${NORM}.tar" n
+  json=$(pvesh get "/nodes/${NODE}/storage/${STORAGE}/content" --output-format json 2>/dev/null) || return 1
+  n=$(printf '%s\n' "$json" | jq -r --arg v "$want" '
+    (if type == "string" and test("^\\s*\\{") then fromjson else . end)
+    | (.data // [])
+    | if type == "array" then . else [] end
+    | map(select((.volid // "") == $v))
+    | length
+  ')
+  [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]]
+}
+
+wait_until_ostemplate_visible() {
+  local i
+  if [[ -n "${LOCAL_TAR:-}" && -f "$LOCAL_TAR" ]]; then
+    return 0
+  fi
+  for ((i = 0; i < 20; i++)); do
+    storage_has_ostemplate_volid && return 0
+    sleep 1
+  done
+  return 1
 }
 
 # pvesh JSON varies by version: {"data": N}, {"data": "N"}, double-encoded string, or bare number.
@@ -234,23 +266,38 @@ oci_registry_pull() {
 
 NORM="$(normalize_content_filename "$REFERENCE")"
 OSTEMPLATE="${STORAGE}:vztmpl/${NORM}.tar"
-VZTDIR="$(vztmpl_dir_for_storage "$STORAGE")"
-LOCAL_TAR="${VZTDIR}/${NORM}.tar"
+LOCAL_TAR=""
+VZTDIR=""
+if VZTDIR="$(vztmpl_host_dir_for_storage "$STORAGE")"; then
+  LOCAL_TAR="${VZTDIR}/${NORM}.tar"
+else
+  echo "Note: storage '${STORAGE}' has no resolvable host vztmpl path (typical for ZFS/LVM/RBD pools)." >&2
+  echo "      Using storage API to detect ${OSTEMPLATE}; pct create still uses that volid." >&2
+  echo >&2
+fi
 
 if [[ "$SKIP_PULL" -eq 1 ]]; then
   echo "Skipping pull (--skip-pull). Using ostemplate: ${OSTEMPLATE}"
-elif [[ "$REUSE_LOCAL" -eq 1 && -f "$LOCAL_TAR" ]]; then
-  echo "Reusing existing template file: ${LOCAL_TAR}"
+elif [[ "$REUSE_LOCAL" -eq 1 ]]; then
+  if [[ -n "$LOCAL_TAR" && -f "$LOCAL_TAR" ]]; then
+    echo "Reusing existing template file: ${LOCAL_TAR}"
+  elif storage_has_ostemplate_volid; then
+    echo "Reusing existing template on storage (volid ${OSTEMPLATE})."
+  else
+    oci_registry_pull "$REFERENCE"
+  fi
 else
   oci_registry_pull "$REFERENCE"
 fi
 
-if [[ ! -f "$LOCAL_TAR" ]]; then
-  die "Template tarball not found after pull: ${LOCAL_TAR} (expected volid ${OSTEMPLATE})"
+if [[ -n "$LOCAL_TAR" && -f "$LOCAL_TAR" ]]; then
+  echo "Template on disk: ${LOCAL_TAR}"
+  ls -lh "$LOCAL_TAR" 2>/dev/null || stat "$LOCAL_TAR" 2>/dev/null || true
+elif wait_until_ostemplate_visible; then
+  echo "Template visible on storage: ${OSTEMPLATE}"
+else
+  die "Template not found as ${OSTEMPLATE} (no file at ${LOCAL_TAR:-<no host path>} and storage content listing did not show it)."
 fi
-
-echo "Template on disk: ${LOCAL_TAR}"
-ls -lh "$LOCAL_TAR" 2>/dev/null || stat "$LOCAL_TAR" 2>/dev/null || true
 echo
 
 if [[ "$PULL_ONLY" -eq 1 ]]; then
@@ -285,13 +332,13 @@ cmd=(pct create "$VMID" "$OSTEMPLATE" --rootfs "$ROOTFS_SPEC" --hostname "$HOSTN
 
 mp_idx=0
 for mp_spec in "${MP_SPECS[@]}"; do
-  if [[ ! "$mp_spec" =~ ^([^:]+):([0-9]+):(/.*)$ ]]; then
-    die "Invalid --mp '${mp_spec}' (expected STORAGE:GiB:/path — absolute path inside CT, size in GiB integer, same form as --rootfs storage:size)"
+  if [[ ! "$mp_spec" =~ ^([^:]+):([0-9]+(\.[0-9]+)?):(/.*)$ ]]; then
+    die "Invalid --mp '${mp_spec}' (expected STORAGE:SIZE:/path — absolute path inside CT; SIZE is GiB, integer or decimal e.g. 8 or 0.25)"
   fi
   mp_st="${BASH_REMATCH[1]}"
   mp_sz="${BASH_REMATCH[2]}"
-  mp_path="${BASH_REMATCH[3]}"
-  [[ "$mp_sz" -ge 1 ]] || die "Invalid --mp '${mp_spec}': size must be a positive integer (GiB)"
+  mp_path="${BASH_REMATCH[4]}"
+  awk -v s="$mp_sz" 'BEGIN { exit !(s > 0) }' || die "Invalid --mp '${mp_spec}': size must be > 0"
   cmd+=( "--mp${mp_idx}" "${mp_st}:${mp_sz},mp=${mp_path}" )
   mp_idx=$((mp_idx + 1))
 done
