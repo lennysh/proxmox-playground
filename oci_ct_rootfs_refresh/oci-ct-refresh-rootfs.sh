@@ -208,8 +208,10 @@ create_temp_ct() {
       exit 1
     fi
 
+    echo "pct create OK: temp CT ${TEMP} exists (usually stopped). Removing pull tarball..."
     rm -f "$archive"
     trap - EXIT
+    echo ""
   else
     echo "--- Create temp CT ${TEMP} (pct; local template path / vztmpl) ---"
     cmd=(
@@ -232,6 +234,8 @@ create_temp_ct() {
       echo >&2 "=== Temp CT create failed (pct) ===" >&2
       exit 1
     fi
+    echo "pct create OK: temp CT ${TEMP}."
+    echo ""
   fi
 }
 
@@ -316,8 +320,10 @@ else
   create_temp_ct
 fi
 
-pct stop "$TEMP"
+echo "--- Ensuring temp CT ${TEMP} is stopped (pct create leaves it stopped; pct stop may no-op) ---"
+pct stop "$TEMP" 2>/dev/null || true
 
+echo "--- Mounting root filesystems (pct mount holds a lock until unmount) ---"
 cleanup_mounts() {
   pct unmount "$TEMP" 2>/dev/null || true
   pct unmount "$OLD" 2>/dev/null || true
@@ -326,6 +332,7 @@ trap cleanup_mounts EXIT
 
 pct mount "$OLD"
 pct mount "$TEMP"
+echo "Mounted: ${M_OLD} and ${M_NEW}"
 
 if [[ ! -d "$M_OLD" || ! -d "$M_NEW" ]]; then
   echo "Expected mount paths missing after pct mount:" >&2
@@ -346,8 +353,10 @@ done < <(pct config "$OLD" | grep -E '^mp[0-9]+:' || true)
 
 echo "Syncing new root -> old root (rsync)..."
 rsync -aHAX --delete "${excludes[@]}" "${M_NEW}/" "${M_OLD}/"
+echo "rsync finished."
 
 trap - EXIT
+echo "--- Unmounting, destroying temp CT ${TEMP}, starting CT ${OLD} ---"
 pct unmount "$TEMP"
 pct unmount "$OLD"
 
