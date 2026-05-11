@@ -99,8 +99,13 @@ Storages on node '${NODE}' whose **content** includes **vztmpl** (Container temp
 EOF
   printf '%s\n' "$json" | jq -r '
     def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def pve_array:
+      if type == "array" then .
+      elif type == "object" and (.data != null) then
+        (.data | if type == "array" then . else [.] end)
+      else [] end;
     def has_vztmpl: (.content // "") | test("vztmpl");
-    unwrap | (.data // []) | if type == "array" then . else [] end
+    unwrap | pve_array
     | map(select(has_vztmpl))
     | sort_by(.storage // .storeid // .id)
     | .[]
@@ -206,9 +211,14 @@ template_storage_valid_for_oci_pull() {
   [[ -n "$sid" ]] || return 1
   n=$(printf '%s\n' "$json" | jq -r --arg s "$sid" '
     def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def pve_array:
+      if type == "array" then .
+      elif type == "object" and (.data != null) then
+        (.data | if type == "array" then . else [.] end)
+      else [] end;
     def has_vztmpl: (.content // "") | test("vztmpl");
     def store_id: .storage // .storeid // .id // "";
-    unwrap | (.data // []) | if type == "array" then . else [] end
+    unwrap | pve_array
     | map(select(store_id == $s) | select(has_vztmpl)
         | select((.type // "") == "dir" or (.type // "") == "nfs" or (.type // "") == "cifs"))
     | length
@@ -275,10 +285,14 @@ storage_has_ostemplate_volid() {
   json=$(pvesh get "/nodes/${NODE}/storage/${STORAGE}/content" --output-format json 2>/dev/null) || return 1
   printf '%s\n' "$json" | jq -e . >/dev/null 2>&1 || return 1
   n=$(printf '%s\n' "$json" | jq -r --arg v "$want" '
+    def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def pve_array:
+      if type == "array" then .
+      elif type == "object" and (.data != null) then
+        (.data | if type == "array" then . else [.] end)
+      else [] end;
     try (
-      (if type == "string" and test("^\\s*\\{") then fromjson else . end)
-      | (.data // [])
-      | if type == "array" then . else [] end
+      unwrap | pve_array
       | map(select((.volid // "") == $v))
       | length
     ) catch empty
