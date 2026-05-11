@@ -2,7 +2,7 @@
 
 Proxmox VE can store OCI images as **container templates** on storage that has the **vztmpl** content type. The web UI uses the storage API **`oci-registry-pull`**, which runs the same `skopeo` copy the UI documents internally: `docker://<reference>` → `oci-archive:<vztmpl-dir>/<normalized>.tar`.
 
-This script does that pull (via **`pvesh create …/oci-registry-pull`**, then waits for the worker task), then **`pct create`** using the resulting **`STORAGE:vztmpl/<name>.tar`** volume id—matching the UI flow: download to template storage, then create from that template.
+This script does that pull (via **`pvesh create …/oci-registry-pull`**, then waits for the worker task), then **`pct create`** using the resulting **`<template-storage>:vztmpl/<name>.tar`** volume id—matching the UI: the image lands under **whatever Datacenter → Storage entry** holds **Container template** content (often a **dir** or **nfs** mount), then the CT is created from that same volid.
 
 ## Requirements
 
@@ -10,22 +10,40 @@ This script does that pull (via **`pvesh create …/oci-registry-pull`**, then w
 - Run on a **cluster node** as **root** (local `pvesh` / `pct`).
 - **`jq`** (used for JSON from `pvesh` and task status polling).
 - **`skopeo`** on the node (the API refuses the call if `/usr/bin/skopeo` is missing).
-- **`--storage`** must be **file-based** storage with **`vztmpl`** enabled (same constraint as the UI).
+- **`--storage`** must be the **same storage id** you would pick in the UI for OCI / container templates: a Datacenter → Storage entry whose **content** includes **vztmpl**, and whose **type** supports **`oci-registry-pull`** (typically **`dir`**, **`nfs`**, **`cifs`** — **not** a **`zfspool`** id used only for CT disks).
+
+### Which `--storage` id is that?
+
+It is **your** Proxmox storage id for **Container templates** (mounted NFS, `dir` under `/mnt/pve/…`, etc.) — the same id the UI uses when it stores an OCI image there. You can run **`--list-template-storages`**, or omit **`--storage`** / pass a wrong id and the script will **list candidates and exit 2** so you can copy a valid id. Your zfspool (e.g. **`Storage`**) stays on **`--rootfs`** / **`--mp`**.
+
+### ZFS pool for the CT but templates on a mount
+
+```bash
+./oci-ct-create-from-registry.sh \
+  --storage nfs-proxmox \
+  --reference docker.io/library/nginx:latest \
+  --rootfs Storage:8 \
+  --mp Storage:0.25:/var/cache/nginx \
+  --mp Storage:0.25:/mnt/media
+```
+
+(`nfs-proxmox` is an example id — substitute the id from **`--list-template-storages`**.)
 
 ## Usage
 
 ```bash
 chmod +x oci-ct-create-from-registry.sh
 ./oci-ct-create-from-registry.sh --help
+./oci-ct-create-from-registry.sh --list-template-storages
 ```
 
 Typical create:
 
 ```bash
 ./oci-ct-create-from-registry.sh \
-  --storage local \
+  --storage nfs-proxmox \
   --reference docker.io/library/nginx:latest \
-  --rootfs local-zfs:8 \
+  --rootfs Storage:8 \
   --hostname my-nginx-ct
 ```
 
@@ -33,7 +51,7 @@ Template-only download (no CT):
 
 ```bash
 ./oci-ct-create-from-registry.sh \
-  --storage local \
+  --storage nfs-proxmox \
   --reference ghcr.io/org/app:1.2.3 \
   --pull-only
 ```
@@ -42,7 +60,8 @@ Template-only download (no CT):
 
 | Option | Meaning |
 |--------|--------|
-| `--storage ID` | Template storage (must allow **vztmpl**). |
+| `--storage ID` | **Optional.** Template / vztmpl storage id (same as Datacenter → Storage in the UI). If omitted, or not usable for **`oci-registry-pull`** on this node (no **vztmpl**, or type not **dir**/**nfs**/**cifs**), the script **prints the candidate list** and exits **2** — re-run with **`--storage <id>`** from that list. |
+| `--list-template-storages` | Lists node storages that include **vztmpl** and marks which accept **`oci-registry-pull`** (same rule as the UI). No other flags required. |
 | `--reference REF` | Image reference for the API (e.g. `docker.io/library/alpine:3.21`). Leading `oci://` or `docker://` is stripped. |
 | `--rootfs SPEC` | New CT disk: **`STORAGE:GiB`** integer (e.g. `local-zfs:8`). Not used with **`--pull-only`**. |
 | `--vmid ID` | Optional; default is cluster next free (`pvesh get /cluster/nextid`). |
@@ -69,7 +88,7 @@ Current script behaviour:
 
 - It **does not abort** anymore; it lists **`/nodes/<node>/storage/<storage>/content`** until **`STORAGE:vztmpl/<normalized>.tar`** appears (after **`oci-registry-pull`**), then runs **`pct create`** with that volid.
 
-**Note:** Proxmox’s **`oci-registry-pull`** API itself may still require a **file-backed** storage with a **`path`** in some versions. If **`pvesh create … oci-registry-pull`** fails for a ZFS-only template store, use a **dir/NFS** storage for **vztmpl** in the UI (or a second storage id) for pulls, or pull where the UI allows it.
+**Note:** Proxmox’s **`oci-registry-pull`** API **rejects `zfspool`** for the pull target. That is a product limitation, not this script. Use **`--list-template-storages`** to pick the template storage id (same as the UI), and **`--rootfs` / `--mp`** for ZFS (or any) CT disks.
 
 ## Implementation notes
 

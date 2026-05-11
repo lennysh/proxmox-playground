@@ -15,10 +15,14 @@ usage() {
   cat <<'EOF'
 Usage: oci-ct-create-from-registry.sh [options]
 
-Required:
-  --storage ID          Storage where templates live (must allow content vztmpl)
+Required (omit when using --list-template-storages):
+  --storage ID          Optional. Same as the UI: Datacenter → Storage id where **vztmpl**
+                        (Container templates) lives — **dir** / **nfs** / **cifs**, not zfspool.
+                        If omitted or invalid for oci-registry-pull, the script **lists** candidates
+                        and exits 2 (re-run with --storage <id>).
+                        Explicit list:  --list-template-storages
   --reference REF       OCI image reference for the API (e.g. docker.io/library/nginx:latest)
-  --rootfs SPEC         New CT root disk: STORAGE:GiB_integer (e.g. local-zfs:8)
+  --rootfs SPEC         New CT root disk: STORAGE:GiB_integer (e.g. Storage:8) — often your zfspool
 
 Common options:
   --vmid ID             CT VMID (default: cluster next free id via pvesh /cluster/nextid)
@@ -42,16 +46,19 @@ Pull behaviour:
   --reuse-local-template If normalized .tar already exists under vztmpl, skip pull
 
 Other:
+  --list-template-storages  Print storages on this node that include vztmpl (Container templates)
+                        and which ones accept oci-registry-pull (same rule as the UI). Exits 0.
+                        Optional: --node N  (any order with this flag).
   --pull-only           Only download the template to storage, then exit (no pct create)
   -h, --help            This help
 
-Example:
+Example (templates on mounted storage id nfs-proxmox, CT disks on zfspool Storage):
   ./oci-ct-create-from-registry.sh \\
-    --storage local \\
+    --storage nfs-proxmox \\
     --reference docker.io/library/nginx:latest \\
-    --rootfs local-zfs:8 \\
+    --rootfs Storage:8 \\
     --hostname nginx-oci-1 \\
-    --mp local-zfs:10:/var/cache/nginx
+    --mp Storage:0.25:/var/cache/nginx
 
 After create, start with: pct start <vmid>
 EOF
@@ -59,6 +66,56 @@ EOF
 }
 
 die() { echo "$*" >&2; exit 1; }
+
+node_name() {
+  if command -v pvecm &>/dev/null; then
+    local n
+    n="$(pvecm nodename 2>/dev/null)" || true
+    [[ -n "$n" ]] && { printf '%s\n' "$n"; return; }
+  fi
+  hostname -s
+}
+
+list_template_storages() {
+  local json
+  if [[ -n "${STORAGE_JSON_CACHED:-}" ]]; then
+    json="$STORAGE_JSON_CACHED"
+  else
+    json=$(pvesh get "/nodes/${NODE}/storage" --output-format json 2>/dev/null) || die "pvesh get /nodes/${NODE}/storage failed"
+  fi
+  if ! printf '%s\n' "$json" | jq -e . >/dev/null 2>&1; then
+    echo "Storage list response was not valid JSON (first 400 chars):" >&2
+    printf '%s\n' "$json" | head -c 400 >&2
+    echo >&2
+    die "Cannot parse /nodes/${NODE}/storage output."
+  fi
+  cat <<EOF
+Storages on node '${NODE}' whose **content** includes **vztmpl** (Container template — same as Datacenter → Storage in the UI):
+
+  Use the **storage id** printed below as --storage. That is the same id the UI uses when it stores
+  an OCI image under your Container templates path.  oci-registry-pull **yes** means Proxmox can
+  write the .tar there (dir / nfs / cifs — same API as the UI).  **no** means pick another id (e.g. your zfspool cannot host OCI pulls).
+
+EOF
+  printf '%s\n' "$json" | jq -r '
+    def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def has_vztmpl: (.content // "") | test("vztmpl");
+    unwrap | (.data // []) | if type == "array" then . else [] end
+    | map(select(has_vztmpl))
+    | sort_by(.storage // .storeid // .id)
+    | .[]
+    | (.storage // .storeid // .id) as $id
+    | (.type // "?") as $t
+    | (
+        if (.path // "") != "" then .path
+        elif (.server // "") != "" then ("nfs " + .server + " " + (.export // ""))
+        else "—"
+        end
+      ) as $hint
+    | (if ($t == "dir" or $t == "nfs" or $t == "cifs") then "yes" else "no" end) as $ok
+    | "storage id: \($id)\n  type: \($t)\n  path / export: \($hint)\n  oci-registry-pull (same rule as UI): \($ok)\n"
+  '
+}
 
 STORAGE=""
 REFERENCE=""
@@ -76,6 +133,8 @@ ONBOOT="0"
 SKIP_PULL=0
 REUSE_LOCAL=0
 PULL_ONLY=0
+LIST_TEMPLATE_STORAGES=0
+STORAGE_JSON_CACHED=""
 MP_SPECS=()
 
 while [[ $# -gt 0 ]]; do
@@ -97,6 +156,7 @@ while [[ $# -gt 0 ]]; do
     --skip-pull)        SKIP_PULL=1; shift ;;
     --reuse-local-template) REUSE_LOCAL=1; shift ;;
     --pull-only)        PULL_ONLY=1; shift ;;
+    --list-template-storages) LIST_TEMPLATE_STORAGES=1; shift ;;
     -h|--help)          usage ;;
     *)
       die "Unknown option: $1 (use --help)"
@@ -104,7 +164,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$STORAGE" ]] || die "Missing --storage"
+if [[ "$LIST_TEMPLATE_STORAGES" -eq 1 ]]; then
+  command -v jq >/dev/null 2>&1 || die "jq is required for --list-template-storages."
+  command -v pvesh >/dev/null 2>&1 || die "pvesh not found (run on a Proxmox VE node as root)."
+  [[ -n "$NODE" ]] || NODE="$(node_name)"
+  list_template_storages
+  exit 0
+fi
+
 [[ -n "$REFERENCE" ]] || die "Missing --reference"
 if [[ "$PULL_ONLY" -eq 1 ]]; then
   :
@@ -120,16 +187,58 @@ if [[ "$PULL_ONLY" -eq 0 ]]; then
   command -v pct >/dev/null 2>&1 || die "pct not found (run on a Proxmox VE node as root)."
 fi
 
-node_name() {
-  if command -v pvecm &>/dev/null; then
-    local n
-    n="$(pvecm nodename 2>/dev/null)" || true
-    [[ -n "$n" ]] && { printf '%s\n' "$n"; return; }
+[[ -n "$NODE" ]] || NODE="$(node_name)"
+
+load_node_storage_json() {
+  STORAGE_JSON_CACHED=$(pvesh get "/nodes/${NODE}/storage" --output-format json 2>/dev/null) \
+    || die "pvesh get /nodes/${NODE}/storage failed"
+  if ! printf '%s\n' "$STORAGE_JSON_CACHED" | jq -e . >/dev/null 2>&1; then
+    echo "Storage list was not valid JSON (first 400 chars):" >&2
+    printf '%s\n' "$STORAGE_JSON_CACHED" | head -c 400 >&2
+    echo >&2
+    die "Cannot parse /nodes/${NODE}/storage output."
   fi
-  hostname -s
 }
 
-[[ -n "$NODE" ]] || NODE="$(node_name)"
+# True if this node has a storage entry $1 with vztmpl and a type Proxmox allows for oci-registry-pull.
+template_storage_valid_for_oci_pull() {
+  local sid="$1" json="$STORAGE_JSON_CACHED" n
+  [[ -n "$sid" ]] || return 1
+  n=$(printf '%s\n' "$json" | jq -r --arg s "$sid" '
+    def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def has_vztmpl: (.content // "") | test("vztmpl");
+    def store_id: .storage // .storeid // .id // "";
+    unwrap | (.data // []) | if type == "array" then . else [] end
+    | map(select(store_id == $s) | select(has_vztmpl)
+        | select((.type // "") == "dir" or (.type // "") == "nfs" or (.type // "") == "cifs"))
+    | length
+  ')
+  [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]]
+}
+
+pick_template_storage_or_exit() {
+  load_node_storage_json
+  STORAGE="${STORAGE#"${STORAGE%%[![:space:]]*}"}"
+  STORAGE="${STORAGE%"${STORAGE##*[![:space:]]}"}"
+  if [[ -z "$STORAGE" ]]; then
+    echo "--storage not set. Storages on node '${NODE}' that can host OCI template pulls (vztmpl + dir|nfs|cifs):" >&2
+    echo >&2
+    list_template_storages
+    echo >&2
+    echo "Re-run with:  --storage <storage id from above where oci-registry-pull is yes>" >&2
+    exit 2
+  fi
+  if ! template_storage_valid_for_oci_pull "$STORAGE"; then
+    echo "Invalid --storage '${STORAGE}' for oci-registry-pull (not found on this node, or no vztmpl, or type is not dir/nfs/cifs)." >&2
+    echo >&2
+    list_template_storages
+    echo >&2
+    echo "Re-run with:  --storage <storage id from above where oci-registry-pull is yes>" >&2
+    exit 2
+  fi
+}
+
+pick_template_storage_or_exit
 
 # Match PVE::Storage::normalize_content_filename (pve-storage) used by oci-registry-pull.
 normalize_content_filename() {
@@ -164,13 +273,16 @@ vztmpl_host_dir_for_storage() {
 storage_has_ostemplate_volid() {
   local json want="${STORAGE}:vztmpl/${NORM}.tar" n
   json=$(pvesh get "/nodes/${NODE}/storage/${STORAGE}/content" --output-format json 2>/dev/null) || return 1
+  printf '%s\n' "$json" | jq -e . >/dev/null 2>&1 || return 1
   n=$(printf '%s\n' "$json" | jq -r --arg v "$want" '
-    (if type == "string" and test("^\\s*\\{") then fromjson else . end)
-    | (.data // [])
-    | if type == "array" then . else [] end
-    | map(select((.volid // "") == $v))
-    | length
-  ')
+    try (
+      (if type == "string" and test("^\\s*\\{") then fromjson else . end)
+      | (.data // [])
+      | if type == "array" then . else [] end
+      | map(select((.volid // "") == $v))
+      | length
+    ) catch empty
+  ' 2>/dev/null) || return 1
   [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]]
 }
 
@@ -214,6 +326,43 @@ next_cluster_id() {
   printf '%s\n' "$id"
 }
 
+# pvesh create sometimes prints a bare UPID line or mixes stderr; avoid jq on non-JSON.
+parse_upid_from_create_response() {
+  local raw="$1" upid
+  upid=$(printf '%s\n' "$raw" | grep -oE 'UPID:[^[:space:]]+' | tail -1)
+  if [[ -n "$upid" ]]; then
+    printf '%s\n' "$upid"
+    return 0
+  fi
+  upid=$(printf '%s\n' "$raw" | jq -r '
+    try (
+      (if type == "string" and test("^\\s*\\{") then fromjson else . end)
+      | if type == "object" and (.data != null) then .data else . end
+      | if type == "string" then . elif type == "number" then tostring else empty end
+    ) catch empty
+  ' 2>/dev/null) || true
+  if [[ -n "$upid" && "$upid" != "null" ]]; then
+    printf '%s\n' "$upid"
+    return 0
+  fi
+  while IFS= read -r line || [[ -n "${line:-}" ]]; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*\{ ]] || continue
+    upid=$(printf '%s\n' "$line" | jq -r '
+      try (
+        (if type == "string" and test("^\\s*\\{") then fromjson else . end)
+        | if type == "object" and (.data != null) then .data else . end
+        | if type == "string" then . elif type == "number" then tostring else empty end
+      ) catch empty
+    ' 2>/dev/null) || true
+    if [[ -n "$upid" && "$upid" != "null" ]]; then
+      printf '%s\n' "$upid"
+      return 0
+    fi
+  done <<< "$(printf '%s\n' "$raw")"
+  return 1
+}
+
 wait_for_task() {
   local upid="$1" max="${2:-7200}" waited=0
   local status exitstatus line
@@ -247,15 +396,20 @@ oci_registry_pull() {
   out=$(pvesh create "/nodes/${NODE}/storage/${STORAGE}/oci-registry-pull" \
     --reference "$ref" --output-format json 2>&1) || {
     echo "$out" >&2
-    die "pvesh oci-registry-pull failed. Is this PVE version new enough, storage '${STORAGE}' enabled for vztmpl, and skopeo installed?"
+    if echo "$out" | grep -qiE 'not a file based storage|zfspool'; then
+      echo >&2
+      echo "oci-registry-pull only supports the same storages the UI can write an OCI .tar to (dir, nfs, cifs, …), not zfspool." >&2
+      echo "Pass the Datacenter → Storage **id** where your Container templates path lives (vztmpl on your mount), not your CT disk pool:" >&2
+      echo "  $0 --list-template-storages" >&2
+      echo "Then e.g.:  --storage <that-id> --reference ${ref} --rootfs Storage:8 ..." >&2
+    else
+      echo "Hint: storage '${STORAGE}' must have vztmpl content; skopeo must exist at /usr/bin/skopeo; PVE must expose oci-registry-pull." >&2
+    fi
+    die "pvesh oci-registry-pull failed."
   }
 
-  upid=$(printf '%s\n' "$out" | jq -r '
-    def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
-    unwrap | if type == "object" and (.data != null) then .data else . end
-    | if type == "string" then . elif type == "number" then tostring else empty end
-  ')
-  [[ -n "$upid" && "$upid" != "null" ]] || die "Could not parse UPID from pvesh output: $out"
+  upid="$(parse_upid_from_create_response "$out" || true)"
+  [[ -n "$upid" ]] || die "Could not parse UPID from pvesh output (expected JSON with .data or a UPID: line): $out"
 
   echo "Worker UPID: ${upid}"
   echo "Waiting for pull to finish..."
