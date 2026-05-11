@@ -15,7 +15,7 @@ usage() {
   echo "  -h, --help                Show this help"
   echo ""
   echo "  old_ctid     Running or stopped CT to update (keeps same CTID, net, mpX, ...)"
-  echo "  new_oci_ref  New image, e.g. oci://docker.io/library/nginx:latest"
+  echo "  new_oci_ref  OCI image (oci://… or bare ghcr.io/… / docker.io/… — see README)"
   echo "  temp_ctid    Optional; default: next free cluster VMID"
   echo ""
   echo "Example:"
@@ -46,14 +46,49 @@ if [[ "$SKIP_SNAPSHOT" -ne 0 && "$ALLOW_FAILED_SNAPSHOT" -ne 0 ]]; then
 fi
 
 OLD="$1"
-NEW_OCI="$2"
+# pct requires oci:// for registry pulls; bare registry/repo:tag is normalized.
+normalize_image_ref() {
+  local r="$1"
+  case "$r" in
+    oci://*) printf '%s\n' "$r" ;;
+    /*|../*|./*) printf '%s\n' "$r" ;;
+    http://*|https://*) printf '%s\n' "$r" ;;
+    *:vztmpl/*|*:import/*) printf '%s\n' "$r" ;;
+    *) printf 'oci://%s\n' "$r" ;;
+  esac
+}
+NEW_OCI="$(normalize_image_ref "$2")"
+if [[ "$NEW_OCI" != "$2" ]]; then
+  echo "Image ref: $2 -> $NEW_OCI" >&2
+fi
 
+# pvesh JSON varies by version: {"data": N}, {"data": "N"}, double-encoded string, or bare number.
 next_cluster_id() {
+  local out id
+  out=$(pvesh get /cluster/nextid --output-format json 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+
   if command -v jq >/dev/null 2>&1; then
-    pvesh get /cluster/nextid --output-format json | jq -r '.data // empty'
+    id=$(printf '%s\n' "$out" | jq -r '
+      def unwrap:
+        if type == "string" then
+          if test("^\\s*\\{") then fromjson else . end
+        else . end;
+      unwrap
+      | if type == "object" and (.data != null) then .data else . end
+      | if type == "number" then tostring
+        elif type == "string" and test("^[0-9]+$") then .
+        else empty end
+    ')
   else
-    pvesh get /cluster/nextid --output-format json | sed -n 's/.*"data" *: *\([0-9][0-9]*\).*/\1/p'
+    # No jq: prefer explicit "data" field, then bare JSON integer
+    id=$(printf '%s\n' "$out" | sed -n 's/.*"data"[[:space:]]*:[[:space:]]*"\([0-9][0-9]*\)".*/\1/p')
+    [[ -n "$id" ]] || id=$(printf '%s\n' "$out" | sed -n 's/.*"data"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    [[ -n "$id" ]] || id=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p')
   fi
+
+  [[ -n "$id" ]] || return 1
+  printf '%s\n' "$id"
 }
 
 if [[ -n "${3:-}" ]]; then

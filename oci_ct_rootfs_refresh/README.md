@@ -36,7 +36,7 @@ chmod +x oci-ct-refresh-rootfs.sh   # once
 | Argument      | Description |
 |---------------|-------------|
 | `old_ctid`    | The CT to keep (same ID, config, bind mounts). |
-| `new_oci_ref` | New image reference, e.g. `oci://docker.io/library/nginx:latest`. |
+| `new_oci_ref` | New image reference. **`pct create` expects `oci://` for registry pulls**; this script prepends it when you pass a bare ref like `ghcr.io/org/app:tag`. You can still pass `oci://…` explicitly. Local templates stay unchanged: paths (`/var/lib/…`), `http(s)://…`, or `*:vztmpl/*` / `*:import/*` are not prefixed. |
 | `temp_ctid`   | Optional. If omitted, uses the cluster **next free** VMID from `pvesh get /cluster/nextid`. |
 
 **Examples**
@@ -63,6 +63,7 @@ Anything you need across refreshes should be on **`mpX`** (or similar) or rebuil
 - Default **temp `net0`** is `bridge=vmbr0,ip=dhcp` so `pct create` succeeds without copying a full static layout. If your site requires static IPs at create time, edit the script to copy `net0` from `$OLD` (or pass equivalent options).
 - **`rsync --delete`** makes the old root match the new image; paths listed as **`mp=`** targets on the old config get **`--exclude`** so the sync does not try to wipe those directory trees on the root volume (they are usually empty while stopped; excludes add a small safety margin).
 - **Clusters**: the CT must be **local** to the node you run on. For remote nodes, run the script over SSH on that node (or extend the script).
+- **Next free VMID**: `pvesh get /cluster/nextid --output-format json` differs across PVE versions (plain object, or JSON encoded as a string). The script unwraps that for `jq`. If anything still looks wrong, pass **`temp_ctid`** explicitly as the third argument.
 
 ## Snapshots vs full backups
 
