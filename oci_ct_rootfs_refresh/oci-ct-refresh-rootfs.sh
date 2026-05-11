@@ -6,6 +6,64 @@
 # Run on the Proxmox node as root. The CT must be local to this node.
 set -euo pipefail
 
+# Readable progress (plain text if NO_COLOR=1 or stdout is not a TTY).
+_out_init() {
+  B=D=G=Y=M=R=
+  _OUTW=$(( ${COLUMNS:-80} - 4 ))
+  [[ "$_OUTW" -lt 48 ]] && _OUTW=48
+  [[ "$_OUTW" -gt 100 ]] && _OUTW=100
+  if [[ -n "${NO_COLOR:-}" ]] || ! [[ -t 1 ]] || ! command -v tput >/dev/null 2>&1; then
+    return 0
+  fi
+  B=$(tput bold 2>/dev/null || true)
+  D=$(tput dim 2>/dev/null || true)
+  G=$(tput setaf 2 2>/dev/null || true)
+  Y=$(tput setaf 3 2>/dev/null || true)
+  M=$(tput setaf 6 2>/dev/null || true)
+  R=$(tput sgr0 2>/dev/null || true)
+}
+_out_init
+
+hr() {
+  local i
+  printf '%s' "$D"
+  for ((i = 0; i < _OUTW; i++)); do printf '─'; done
+  printf '%s\n' "$R"
+}
+
+out_title() {
+  printf '\n%s%s%s\n' "$B$M" "$*" "$R"
+  hr
+}
+
+out_sub() {
+  printf '\n%s%s%s\n' "$B" "$*" "$R"
+}
+
+out_kv() {
+  printf '  %-20s  %s\n' "$1" "$2"
+}
+
+out_note() {
+  printf '  %s%s%s\n' "$D" "$*" "$R"
+}
+
+out_step() {
+  printf '\n%s▸ %s/%s%s  %s\n' "$B$Y" "$1" "$2" "$R" "$3"
+}
+
+out_ok() {
+  printf '%s✓ %s%s\n' "$G" "$*" "$R"
+}
+
+out_warn() {
+  printf '%s! %s%s\n' "$Y" "$*" "$R" >&2
+}
+
+out_cmd_line() {
+  printf '  %s%s%s\n' "$D" "$*" "$R"
+}
+
 usage() {
   echo "Usage: $0 [options] <old_ctid> <new_oci_ref> [temp_ctid]"
   echo ""
@@ -59,7 +117,7 @@ normalize_image_ref() {
 }
 NEW_OCI="$(normalize_image_ref "$2")"
 if [[ "$NEW_OCI" != "$2" ]]; then
-  echo "Image ref: $2 -> $NEW_OCI" >&2
+  printf '%sImage ref normalized:%s %s → %s\n' "$D" "$R" "$2" "$NEW_OCI" >&2
 fi
 
 # pvesh JSON varies by version: {"data": N}, {"data": "N"}, double-encoded string, or bare number.
@@ -149,19 +207,18 @@ create_temp_ct() {
     ref="${NEW_OCI#oci://}"
     tmpdir="${OCI_REFRESH_TMPDIR:-/var/tmp}"
 
-    echo "--- Create temp CT ${TEMP} from OCI (skopeo + local tar → pct create) ---"
-    echo "Why: Proxmox splits ostemplate on the first ':'; 'oci://…' is misread as storage 'oci' (pct and pvesh)."
-    echo "     This path pulls with skopeo then passes a plain filesystem path to pct (no oci:// in ostemplate)."
-    echo
-    echo "Image (normalized): ${NEW_OCI}"
-    echo "Skopeo source:      docker://${ref}"
-    echo "Temp archive dir:   ${tmpdir}  (set OCI_REFRESH_TMPDIR to override; needs ~2× image size free space)"
-    echo "Rootfs new vol:     ${ROOTFS_NEWVOL}  (from size=${SIZE} in CT ${OLD} rootfs line)"
-    echo "Hostname:           ${HOST:-oci-refresh-temp}"
-    [[ -n "$MEMORY" ]] && echo "Memory MB:          ${MEMORY}"
-    echo "Net (temp):         ${net0}"
-    echo "Skopeo verbosity:   set OCI_REFRESH_SKOPEO_VERBOSE=1 for full skopeo copy progress"
-    echo
+    out_title "Temp CT ${TEMP} from OCI (skopeo → tar → pct create)"
+    out_note "Proxmox splits ostemplate on the first ':' — oci://… is misread as storage 'oci'."
+    out_note "This path uses skopeo then a filesystem path to pct (no oci:// in ostemplate)."
+    out_kv "Image" "${NEW_OCI}"
+    out_kv "Skopeo source" "docker://${ref}"
+    out_kv "Archive directory" "${tmpdir}"
+    out_note "~2× image size free space; override dir with OCI_REFRESH_TMPDIR."
+    out_kv "Temp --rootfs" "${ROOTFS_NEWVOL}  (from size=${SIZE} on CT ${OLD})"
+    out_kv "Hostname" "${HOST:-oci-refresh-temp}"
+    [[ -n "$MEMORY" ]] && out_kv "Memory (MB)" "${MEMORY}"
+    out_kv "Temp net0" "${net0}"
+    out_note "Skopeo progress: OCI_REFRESH_SKOPEO_VERBOSE=1"
 
     if ! command -v skopeo >/dev/null 2>&1; then
       echo "skopeo is required for oci:// temp CTs on current Proxmox (colon parsing bug)." >&2
@@ -177,22 +234,21 @@ create_temp_ct() {
     skopeo_args=()
     [[ "${OCI_REFRESH_SKOPEO_VERBOSE:-0}" != 1 ]] && skopeo_args+=(--quiet)
 
-    echo -n "Step 1/2: skopeo copy"
-    [[ ${#skopeo_args[@]} -gt 0 ]] && echo -n " ${skopeo_args[*]}"
-    echo " docker://${ref} oci-archive:${archive}"
+    out_step 1 2 "skopeo copy → oci-archive"
+    out_cmd_line "skopeo copy${skopeo_args[*]:+ ${skopeo_args[*]}} docker://${ref} oci-archive:${archive}"
     if ! skopeo copy "${skopeo_args[@]}" "docker://${ref}" "oci-archive:${archive}"; then
       echo "=== skopeo copy failed ===" >&2
       echo "Hints: outbound HTTPS; auth for ghcr.io → skopeo login ghcr.io (or /root/.config/containers/auth.json)" >&2
       rm -f "$archive"
       exit 1
     fi
-    ls -lh "$archive" 2>/dev/null || stat "$archive" 2>/dev/null || true
-    echo
+    out_note "Archive on disk:"
+    ls -lh "$archive" 2>/dev/null | sed 's/^/    /' || stat "$archive" 2>/dev/null | sed 's/^/    /' || true
 
     cleanup_oci_tar() { rm -f "$archive"; }
     trap 'cleanup_oci_tar' EXIT
 
-    echo "Step 2/2: pct create from local OCI archive"
+    out_step 2 2 "pct create (local OCI archive)"
     cmd=(
       pct create "$TEMP" "$archive"
       --hostname "${HOST:-oci-refresh-temp}"
@@ -206,8 +262,7 @@ create_temp_ct() {
     [[ -n "$FEATURES" ]] && cmd+=( --features "$FEATURES" )
     [[ -n "$MEMORY" ]] && cmd+=( --memory "$MEMORY" )
 
-    echo "Running:"
-    printf ' '; printf '%q ' "${cmd[@]}"; echo; echo
+    out_cmd_line "$(printf '%q ' "${cmd[@]}")"
 
     if ! "${cmd[@]}"; then
       echo "=== pct create from OCI archive failed ===" >&2
@@ -215,12 +270,11 @@ create_temp_ct() {
       exit 1
     fi
 
-    echo "pct create OK: temp CT ${TEMP} exists (usually stopped). Removing pull tarball..."
+    out_ok "pct create finished — temp CT ${TEMP} (typically stopped). Removing tarball…"
     rm -f "$archive"
     trap - EXIT
-    echo ""
   else
-    echo "--- Create temp CT ${TEMP} (pct; local template path / vztmpl) ---"
+    out_title "Temp CT ${TEMP} (local template / vztmpl)"
     cmd=(
       pct create "$TEMP" "$NEW_OCI"
       --hostname "${HOST:-oci-refresh-temp}"
@@ -234,15 +288,13 @@ create_temp_ct() {
     [[ -n "$FEATURES" ]] && cmd+=( --features "$FEATURES" )
     [[ -n "$MEMORY" ]] && cmd+=( --memory "$MEMORY" )
 
-    echo "Running:"
-    printf ' '; printf '%q ' "${cmd[@]}"; echo; echo
+    out_cmd_line "$(printf '%q ' "${cmd[@]}")"
 
     if ! "${cmd[@]}"; then
       echo >&2 "=== Temp CT create failed (pct) ===" >&2
       exit 1
     fi
-    echo "pct create OK: temp CT ${TEMP}."
-    echo ""
+    out_ok "pct create finished — temp CT ${TEMP}."
   fi
 }
 
@@ -285,59 +337,64 @@ MEMORY="$(cfg "$OLD" memory)"
 M_OLD="/var/lib/lxc/${OLD}/rootfs"
 M_NEW="/var/lib/lxc/${TEMP}/rootfs"
 
-echo "Old CT:     $OLD"
-echo "Temp CT:    $TEMP"
-echo "New image:  $NEW_OCI"
-echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${ROOTFS_NEWVOL}  (pct wants GiB integer, not ${SIZE})"
-[[ -n "$MEMORY" ]] && echo "Memory MB:  ${MEMORY}  (copied to temp CT create)"
-echo "This host:  $(hostname -s)  (run script on the node that owns CT ${OLD})"
-echo ""
+out_title "OCI rootfs refresh"
+out_kv "Old CTID" "$OLD"
+out_kv "Temp CTID" "$TEMP"
+out_kv "New image" "$NEW_OCI"
+out_kv "Rootfs (current)" "$ROOTFS_LINE"
+out_kv "Temp disk" "${ROOTFS_NEWVOL}  (pct create uses GiB integer, not ${SIZE})"
+[[ -n "$MEMORY" ]] && out_kv "Memory (MB)" "${MEMORY} (copied to temp create)"
+out_kv "Node" "$(hostname -s)"
+out_note "Run on the Proxmox node that owns CT ${OLD}."
 
-echo "--- CT ${OLD} must be stopped for snapshot + pct mount (need not have been running) ---"
+out_sub "Stop CT ${OLD} (snapshot + mount need a stopped CT)"
 if pct_ct_needs_stop "$OLD"; then
-  echo "Stopping CT ${OLD} (pct status: running or frozen)..."
+  out_note "State is running or frozen — pct stop…"
   pct stop "$OLD"
+  out_ok "CT ${OLD} stopped."
 else
-  echo "CT ${OLD} already stopped (or not active); skipping pct stop."
+  out_ok "CT ${OLD} already stopped — skipped pct stop."
 fi
-echo ""
 
 # Proxmox integrates pct snapshot with snapshot-capable rootfs/mp storages (e.g. ZFS).
 # Bind-mount host paths are not part of the root volume; snapshot mainly covers managed volumes.
 if [[ "$SKIP_SNAPSHOT" -eq 0 ]]; then
   SNAP_NAME="pre-oci-refresh-$(date -u +%Y%m%d-%H%M%S)UTC"
   SNAP_DESC="oci-ct-refresh-rootfs.sh before rsync from ${NEW_OCI}"
-  echo "Creating snapshot '${SNAP_NAME}' on CT ${OLD}..."
+  out_sub "Snapshot CT ${OLD}"
+  out_note "Name: ${SNAP_NAME}"
   set +e
   pct snapshot "$OLD" "$SNAP_NAME" --description "$SNAP_DESC"
   snap_rc=$?
   set -e
   if [[ "$snap_rc" -eq 0 ]]; then
-    echo "Snapshot OK. Rollback example: pct rollback ${OLD} ${SNAP_NAME}"
+    out_ok "Snapshot created."
+    out_note "Rollback: pct rollback ${OLD} ${SNAP_NAME}"
   else
     if [[ "$ALLOW_FAILED_SNAPSHOT" -eq 0 ]]; then
       echo "Snapshot failed (exit ${snap_rc}); aborting. Fix storage/snapshot support or pass --allow-failed-snapshot." >&2
       exit 1
     fi
-    echo "Warning: pct snapshot failed (exit ${snap_rc}); continuing (--allow-failed-snapshot)." >&2
-    echo "         For rollback safety use snapshot-capable storage, or vzdump/PBS for backups." >&2
+    out_warn "pct snapshot failed (exit ${snap_rc}); continuing (--allow-failed-snapshot)."
+    out_warn "Prefer snapshot-capable storage, or vzdump/PBS for rollback safety."
   fi
-  echo ""
 else
-  echo "Skipping snapshot (--no-snapshot)."
-  echo ""
+  out_sub "Snapshot"
+  out_note "Skipped (--no-snapshot)."
 fi
 
 if pct config "$TEMP" &>/dev/null; then
-  echo "Temp CT $TEMP already exists; reusing (will stop and refresh from image)." >&2
+  out_warn "Temp CT ${TEMP} already exists — reusing (will stop and refresh from image)."
 else
   create_temp_ct
 fi
 
-echo "--- Ensuring temp CT ${TEMP} is stopped (pct create leaves it stopped; pct stop may no-op) ---"
+out_sub "Stop temp CT ${TEMP}"
+out_note "Usually already stopped after pct create; pct stop is a no-op if so."
 pct stop "$TEMP" 2>/dev/null || true
 
-echo "--- Mounting root filesystems (pct mount holds a lock until unmount) ---"
+out_sub "Mount root filesystems"
+out_note "pct mount holds a lock until unmount."
 cleanup_mounts() {
   pct unmount "$TEMP" 2>/dev/null || true
   pct unmount "$OLD" 2>/dev/null || true
@@ -346,7 +403,7 @@ trap cleanup_mounts EXIT
 
 pct mount "$OLD"
 pct mount "$TEMP"
-echo "Mounted: ${M_OLD} and ${M_NEW}"
+out_ok "Mounted ${M_OLD} and ${M_NEW}"
 
 if [[ ! -d "$M_OLD" || ! -d "$M_NEW" ]]; then
   echo "Expected mount paths missing after pct mount:" >&2
@@ -372,23 +429,26 @@ while IFS= read -r line; do
   excludes+=( --exclude="${rel}" --exclude="${rel%/}/" )
 done < <(pct config "$OLD" | LC_ALL=C grep -aE '^mp[0-9]+:' || true)
 
+out_sub "rsync → CT ${OLD} rootfs"
 if [[ ${#excludes[@]} -gt 0 ]]; then
-  echo "rsync excludes for bind-mount paths (mp=): ${excludes[*]}"
+  out_note "rsync excludes (mp= bind-mount paths under rootfs):"
+  out_cmd_line "${excludes[*]}"
 else
-  echo "rsync excludes: (none — no mp lines found on CT ${OLD}; bind mounts under pct mount would break --delete without excludes)"
+  out_note "No mp= excludes (no mp lines in CT ${OLD} config). Bind mounts under the mount can break rsync --delete if present."
 fi
-
-echo "Syncing new root -> old root (rsync)..."
+out_note "Syncing ${M_NEW}/ → ${M_OLD}/ …"
 rsync -aHAX --delete "${excludes[@]}" "${M_NEW}/" "${M_OLD}/"
-echo "rsync finished."
+out_ok "rsync completed."
 
 trap - EXIT
-echo "--- Unmounting, destroying temp CT ${TEMP}, starting CT ${OLD} ---"
+out_sub "Cleanup: unmount → destroy ${TEMP} → start ${OLD}"
 pct unmount "$TEMP"
 pct unmount "$OLD"
 
 pct destroy "$TEMP"
 pct start "$OLD"
 
-echo ""
-echo "Done: CT $OLD root refreshed from $NEW_OCI (mpX / config unchanged)."
+printf '\n'
+out_title "Done"
+out_kv "CT" "${OLD} (mp* / config unchanged)"
+out_kv "Image" "${NEW_OCI}"
