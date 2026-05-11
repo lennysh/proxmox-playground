@@ -32,6 +32,10 @@ Common options:
   --features SPEC       pct --features
   --onboot 0|1          pct --onboot (default: 0)
 
+Additional volumes (mount points inside the CT; new disks on STORAGE):
+  --mp SPEC             Repeatable. SPEC = STORAGE:GiB:/path  (e.g. --mp local-zfs:32:/var/lib/data)
+                        → pct --mp0 STORAGE:GiB,mp=/path  (mp1, mp2, … in order)
+
 Pull behaviour:
   --skip-pull           Do not call oci-registry-pull; use an already-downloaded template
   --reuse-local-template If normalized .tar already exists under vztmpl, skip pull
@@ -45,7 +49,8 @@ Example:
     --storage local \\
     --reference docker.io/library/nginx:latest \\
     --rootfs local-zfs:8 \\
-    --hostname nginx-oci-1
+    --hostname nginx-oci-1 \\
+    --mp local-zfs:10:/var/cache/nginx
 
 After create, start with: pct start <vmid>
 EOF
@@ -70,6 +75,7 @@ ONBOOT="0"
 SKIP_PULL=0
 REUSE_LOCAL=0
 PULL_ONLY=0
+MP_SPECS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -86,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --unprivileged)     UNPRIV="${2:?}"; shift 2 ;;
     --features)         FEATURES="${2:?}"; shift 2 ;;
     --onboot)           ONBOOT="${2:?}"; shift 2 ;;
+    --mp)               MP_SPECS+=("${2:?}"); shift 2 ;;
     --skip-pull)        SKIP_PULL=1; shift ;;
     --reuse-local-template) REUSE_LOCAL=1; shift ;;
     --pull-only)        PULL_ONLY=1; shift ;;
@@ -264,6 +271,9 @@ echo "VMID:       ${VMID}"
 echo "Ostemplate: ${OSTEMPLATE}"
 echo "Rootfs:     ${ROOTFS_SPEC}"
 echo "Hostname:   ${HOSTNAME}"
+if [[ "${#MP_SPECS[@]}" -gt 0 ]]; then
+  echo "Extra mp:   ${MP_SPECS[*]}"
+fi
 echo
 
 cmd=(pct create "$VMID" "$OSTEMPLATE" --rootfs "$ROOTFS_SPEC" --hostname "$HOSTNAME" --net0 "$NET0" --unprivileged "$UNPRIV" --onboot "$ONBOOT")
@@ -272,6 +282,20 @@ cmd=(pct create "$VMID" "$OSTEMPLATE" --rootfs "$ROOTFS_SPEC" --hostname "$HOSTN
 [[ -n "$CORES" ]] && cmd+=(--cores "$CORES")
 [[ -n "$OSTYPE" ]] && cmd+=(--ostype "$OSTYPE")
 [[ -n "$FEATURES" ]] && cmd+=(--features "$FEATURES")
+
+mp_idx=0
+for mp_spec in "${MP_SPECS[@]}"; do
+  if [[ ! "$mp_spec" =~ ^([^:]+):([0-9]+):(/.*)$ ]]; then
+    die "Invalid --mp '${mp_spec}' (expected STORAGE:GiB:/path — absolute path inside CT, size in GiB integer, same form as --rootfs storage:size)"
+  fi
+  mp_st="${BASH_REMATCH[1]}"
+  mp_sz="${BASH_REMATCH[2]}"
+  mp_path="${BASH_REMATCH[3]}"
+  [[ "$mp_sz" -ge 1 ]] || die "Invalid --mp '${mp_spec}': size must be a positive integer (GiB)"
+  cmd+=( "--mp${mp_idx}" "${mp_st}:${mp_sz},mp=${mp_path}" )
+  mp_idx=$((mp_idx + 1))
+done
+unset mp_st mp_sz mp_path mp_spec 2>/dev/null || true
 
 echo "Running:"
 printf ' '; printf '%q ' "${cmd[@]}"; echo; echo

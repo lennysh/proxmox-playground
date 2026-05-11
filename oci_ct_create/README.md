@@ -52,6 +52,13 @@ Template-only download (no CT):
 | `--skip-pull` | Use an existing template on disk (must match normalized name for **`--reference`**). |
 | `--reuse-local-template` | Skip pull if **`…/vztmpl/<normalized>.tar`** already exists. |
 | `--pull-only` | Download template only; no **`pct create`**. |
+| `--mp SPEC` | Repeatable. Extra disk + mount inside the CT: **`STORAGE:GiB:/path`** (e.g. `local-zfs:64:/var/lib/postgresql/data`). Allocates a new volume like **`--rootfs`** and passes **`pct --mp0 …,mp=/path`**, then **`--mp1`**, … in order. |
+
+**`--mp` details**
+
+- **`STORAGE`** must allow LXC rootdir-style volumes (same classes of storage you use for **`--rootfs`**).
+- **`GiB`** is a plain integer in gibibytes, matching **`pct create`** expectations for new volumes (not a `32G` suffix string).
+- **`/path`** is the **guest** mount point (must be absolute). Proxmox creates the mount point entries **`mp0`**, **`mp1`**, … automatically.
 
 ## Implementation notes
 
