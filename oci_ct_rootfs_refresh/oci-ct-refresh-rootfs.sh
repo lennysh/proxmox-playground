@@ -112,6 +112,24 @@ cfg() {
   pct config "$1" | sed -n "s/^$2: //p" | head -1
 }
 
+# pct create --rootfs for a NEW disk: STORAGE:<GiB_integer> (e.g. Storage:8, local-zfs:32).
+# Using STORAGE:1G is wrong: ZFS/LVM treat "1G" as a volume name → "unable to parse zfs volume name '1G'".
+rootfs_alloc_for_pct_create() {
+  local st="$1" sz="$2"
+  if [[ "$sz" =~ ^([0-9]+)G$ ]]; then
+    printf '%s:%s' "$st" "${BASH_REMATCH[1]}"
+  elif [[ "$sz" =~ ^([0-9]+)M$ ]]; then
+    local mib="${BASH_REMATCH[1]}"
+    local gib=$(( (mib + 1023) / 1024 ))
+    [[ "$gib" -lt 1 ]] && gib=1
+    printf '%s:%s' "$st" "$gib"
+  elif [[ "$sz" =~ ^[0-9]+$ ]]; then
+    printf '%s:%s' "$st" "$sz"
+  else
+    printf '%s:%s' "$st" "$sz"
+  fi
+}
+
 # Proxmox treats <ostemplate> like "STORAGE:volume" and splits on the first ':' (pct, pvesh, API).
 # So `oci://registry/...` becomes storage id `oci` → "storage 'oci' does not exist".
 # Workaround: skopeo copy docker://REF oci-archive:FILE.tar then pct create VMID /path/file.tar
@@ -131,7 +149,7 @@ create_temp_ct() {
     echo "Image (normalized): ${NEW_OCI}"
     echo "Skopeo source:      docker://${ref}"
     echo "Temp archive dir:   ${tmpdir}  (set OCI_REFRESH_TMPDIR to override; needs ~2× image size free space)"
-    echo "Rootfs new vol:     ${STORAGE}:${SIZE}"
+    echo "Rootfs new vol:     ${ROOTFS_NEWVOL}  (from size=${SIZE} in CT ${OLD} rootfs line)"
     echo "Hostname:           ${HOST:-oci-refresh-temp}"
     [[ -n "$MEMORY" ]] && echo "Memory MB:          ${MEMORY}"
     echo "Net (temp):         ${net0}"
@@ -171,7 +189,7 @@ create_temp_ct() {
     cmd=(
       pct create "$TEMP" "$archive"
       --hostname "${HOST:-oci-refresh-temp}"
-      --rootfs "${STORAGE}:${SIZE}"
+      --rootfs "${ROOTFS_NEWVOL}"
       --onboot 0
       --net0 "$net0"
     )
@@ -197,7 +215,7 @@ create_temp_ct() {
     cmd=(
       pct create "$TEMP" "$NEW_OCI"
       --hostname "${HOST:-oci-refresh-temp}"
-      --rootfs "${STORAGE}:${SIZE}"
+      --rootfs "${ROOTFS_NEWVOL}"
       --onboot 0
       --net0 "$net0"
     )
@@ -244,6 +262,8 @@ if [[ "$STORAGE" == "oci" ]]; then
   exit 1
 fi
 
+ROOTFS_NEWVOL="$(rootfs_alloc_for_pct_create "$STORAGE" "$SIZE")"
+
 HOST="$(cfg "$OLD" hostname)"
 OSTYPE="$(cfg "$OLD" ostype)"
 UNPRIV="$(cfg "$OLD" unprivileged)"
@@ -257,7 +277,7 @@ M_NEW="/var/lib/lxc/${TEMP}/rootfs"
 echo "Old CT:     $OLD"
 echo "Temp CT:    $TEMP"
 echo "New image:  $NEW_OCI"
-echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${STORAGE}:${SIZE}"
+echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${ROOTFS_NEWVOL}  (pct wants GiB integer, not ${SIZE})"
 [[ -n "$MEMORY" ]] && echo "Memory MB:  ${MEMORY}  (copied to temp CT create)"
 echo "This host:  $(hostname -s)  (run script on the node that owns CT ${OLD})"
 echo ""

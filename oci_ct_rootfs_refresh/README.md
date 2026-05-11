@@ -59,7 +59,7 @@ Anything you need across refreshes should be on **`mpX`** (or similar) or rebuil
 
 ## Implementation notes
 
-- **Temp CT create** reuses **storage** and **size** parsed from the old CT’s `rootfs:` line. A new volume is allocated (`vm-<temp>-disk-*`); it is removed when the temp CT is destroyed.
+- **Temp CT create** reuses **storage** and **size** parsed from the old CT’s `rootfs:` line. A new volume is allocated (`vm-<temp>-disk-*`); it is removed when the temp CT is destroyed. For **`pct create --rootfs`**, Proxmox expects **`STORAGE:<GiB_integer>`** (e.g. `Storage:1` for 1 GiB), not `Storage:1G` — the latter is treated as a ZFS volume name and fails with *unable to parse zfs volume name '1G'*. The script converts `size=1G` from the config into `Storage:1` automatically.
 - **`pct mount`** is used so both filesystems are visible on the host; the doc warns this **locks** the CT until `pct unmount`—keep the rsync window reasonable.
 - Default **temp `net0`** is `bridge=vmbr0,ip=dhcp` so `pct create` succeeds without copying a full static layout. If your site requires static IPs at create time, edit the script to copy `net0` from `$OLD` (or pass equivalent options).
 - **`rsync --delete`** makes the old root match the new image; paths listed as **`mp=`** targets on the old config get **`--exclude`** so the sync does not try to wipe those directory trees on the root volume (they are usually empty while stopped; excludes add a small safety margin).
@@ -77,6 +77,7 @@ Anything you need across refreshes should be on **`mpX`** (or similar) or rebuil
 | `skopeo copy` fails | Outbound HTTPS; for GHCR/private registries run **`skopeo login ghcr.io`** (or configure `/root/.config/containers/auth.json`). |
 | No space during pull | Point **`OCI_REFRESH_TMPDIR`** at a filesystem with enough free space (pull is roughly image size; allow headroom). |
 | `pct create` from `.tar` fails | Same checks as any CT: **`STORAGE`** must allow rootdir, VMID free, enough quota. |
+| `unable to parse zfs volume name '1G'` | **`pct create --rootfs`** must use **`Storage:1`** (GiB as an integer), not **`Storage:1G`**. Current script maps `size=1G` from the CT config to that form. |
 
 ## Snapshots vs full backups
 
