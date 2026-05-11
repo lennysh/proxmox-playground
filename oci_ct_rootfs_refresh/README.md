@@ -64,6 +64,16 @@ Anything you need across refreshes should be on **`mpX`** (or similar) or rebuil
 - **`rsync --delete`** makes the old root match the new image; paths listed as **`mp=`** targets on the old config get **`--exclude`** so the sync does not try to wipe those directory trees on the root volume (they are usually empty while stopped; excludes add a small safety margin).
 - **Clusters**: the CT must be **local** to the node you run on. For remote nodes, run the script over SSH on that node (or extend the script).
 - **Next free VMID**: `pvesh get /cluster/nextid --output-format json` differs across PVE versions (plain object, or JSON encoded as a string). The script unwraps that for `jq`. If anything still looks wrong, pass **`temp_ctid`** explicitly as the third argument.
+- **OCI temp CT: `pvesh` not `pct create`**: `pct create <vmid> <ostemplate>` treats the template like `storage:path` and splits on the **first** `:`. An **`oci://…`** reference is therefore misread as storage id **`oci`** → `storage 'oci' does not exist`. For any template starting with `oci://`, this script creates the temp CT with **`pvesh create /nodes/<hostname -s>/lxc`** so `ostemplate` is passed through the API intact. Tarball / `vztmpl` paths still use `pct create`.
+- **Temp CT networking**: default `name=eth0,bridge=vmbr0,ip=dhcp`. Override with env **`OCI_REFRESH_TEMP_NET0`** (full `pct`/`pvesh` net0 value string) if your node does not use `vmbr0`.
+
+## Troubleshooting
+
+| Symptom | Likely cause / what to do |
+|--------|---------------------------|
+| `storage 'oci' does not exist` | Older script revision used `pct create … oci://…`. Update to this version (uses **`pvesh`** for `oci://`). |
+| `pvesh create …` fails immediately | **`hostname -s`** must match the node name under **Datacenter → Search → Nodes** (same string as in `/nodes/<name>` in the API). Run the script **on** that node. |
+| Registry / pull errors | Node needs outbound HTTPS to the registry; auth may require GUI “download template” first or registry credentials in Proxmox. |
 
 ## Snapshots vs full backups
 

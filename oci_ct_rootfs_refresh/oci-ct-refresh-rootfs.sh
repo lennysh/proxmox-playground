@@ -112,6 +112,83 @@ cfg() {
   pct config "$1" | sed -n "s/^$2: //p" | head -1
 }
 
+# Short hostname must match the cluster node name for pvesh /nodes/<node>/...
+pve_local_node() {
+  hostname -s
+}
+
+# `pct create <vmid> <ostemplate>` splits the template on the first ':' like storage:volume.
+# An OCI ref `oci://registry/...` is misread as storage id "oci" → "storage 'oci' does not exist".
+# Passing ostemplate through the API (pvesh) keeps the full string intact.
+create_temp_ct() {
+  local -a cmd
+  local node net0="${OCI_REFRESH_TEMP_NET0:-name=eth0,bridge=vmbr0,ip=dhcp}"
+
+  if [[ "$NEW_OCI" == oci://* ]]; then
+    node="$(pve_local_node)"
+    echo "--- Create temp CT ${TEMP} from OCI (pvesh API; avoids pct + oci:// colon bug) ---"
+    echo "PVE node:    ${node}  (from hostname -s; must match /nodes/<name> for this host)"
+    echo "Ostemplate:  ${NEW_OCI}"
+    echo "Rootfs new: ${STORAGE}:${SIZE}"
+    echo "Hostname:    ${HOST:-oci-refresh-temp}"
+    [[ -n "$MEMORY" ]] && echo "Memory MB:   ${MEMORY}  (copied from CT ${OLD})"
+    echo "Net (temp):  ${net0}"
+    echo "  (override temp net with env OCI_REFRESH_TEMP_NET0='name=eth0,bridge=vmbr1,ip=dhcp' if needed)"
+    echo
+
+    cmd=(
+      pvesh create "/nodes/${node}/lxc"
+      --vmid "$TEMP"
+      --ostemplate "$NEW_OCI"
+      --hostname "${HOST:-oci-refresh-temp}"
+      --rootfs "${STORAGE}:${SIZE}"
+      --onboot 0
+      --net0 "$net0"
+    )
+    [[ -n "$OSTYPE" ]] && cmd+=( --ostype "$OSTYPE" )
+    [[ -n "$UNPRIV" ]] && cmd+=( --unprivileged "$UNPRIV" )
+    [[ -n "$ARCH" ]] && cmd+=( --arch "$ARCH" )
+    [[ -n "$FEATURES" ]] && cmd+=( --features "$FEATURES" )
+    [[ -n "$MEMORY" ]] && cmd+=( --memory "$MEMORY" )
+
+    echo "Running:"
+    printf ' '; printf '%q ' "${cmd[@]}"; echo; echo
+
+    if ! "${cmd[@]}"; then
+      echo "=== Temp CT create failed ===" >&2
+      echo >&2 "Checks:" >&2
+      echo >&2 "  • Node '${node}' — run on the Proxmox node that owns the CT; 'hostname -s' must match a /nodes/<name> entry (see: pvesh get /nodes)." >&2
+      echo >&2 "  • Storage '${STORAGE}' — must exist and support rootdir: pvesh get /storage --output-format json | jq ." >&2
+      echo >&2 "  • VMID ${TEMP} — must be unused cluster-wide: pvesh get /cluster/nextid" >&2
+      echo >&2 "  • If you ever saw 'storage '\''oci'\'' does not exist': old 'pct create ... oci://...' parsed 'oci' as a storage; this script uses pvesh for oci:// (update your copy)." >&2
+      echo >&2 "  • Shell trace: bash -x \"$0\" ... (same args you used)." >&2
+      exit 1
+    fi
+  else
+    echo "--- Create temp CT ${TEMP} (pct; local template path / vztmpl) ---"
+    cmd=(
+      pct create "$TEMP" "$NEW_OCI"
+      --hostname "${HOST:-oci-refresh-temp}"
+      --rootfs "${STORAGE}:${SIZE}"
+      --onboot 0
+      --net0 "$net0"
+    )
+    [[ -n "$OSTYPE" ]] && cmd+=( --ostype "$OSTYPE" )
+    [[ -n "$UNPRIV" ]] && cmd+=( --unprivileged "$UNPRIV" )
+    [[ -n "$ARCH" ]] && cmd+=( --arch "$ARCH" )
+    [[ -n "$FEATURES" ]] && cmd+=( --features "$FEATURES" )
+    [[ -n "$MEMORY" ]] && cmd+=( --memory "$MEMORY" )
+
+    echo "Running:"
+    printf ' '; printf '%q ' "${cmd[@]}"; echo; echo
+
+    if ! "${cmd[@]}"; then
+      echo >&2 "=== Temp CT create failed (pct) ===" >&2
+      exit 1
+    fi
+  fi
+}
+
 ROOTFS_LINE="$(cfg "$OLD" rootfs)"
 if [[ -z "$ROOTFS_LINE" ]]; then
   echo "Could not read rootfs: for CT $OLD" >&2
@@ -132,11 +209,19 @@ if [[ -z "$SIZE" || "$SIZE" == "$VOL_AND_REST" ]]; then
   exit 1
 fi
 
+if [[ "$STORAGE" == "oci" ]]; then
+  echo "Parsed storage id is 'oci' from rootfs line — that is almost certainly wrong." >&2
+  echo "  rootfs line was: ${ROOTFS_LINE}" >&2
+  echo "  Expected form:   <STORAGE_ID>:<volume>,size=<N>G  (e.g. local-zfs:vm-100-disk-0,size=8G)" >&2
+  exit 1
+fi
+
 HOST="$(cfg "$OLD" hostname)"
 OSTYPE="$(cfg "$OLD" ostype)"
 UNPRIV="$(cfg "$OLD" unprivileged)"
 ARCH="$(cfg "$OLD" arch)"
 FEATURES="$(cfg "$OLD" features)"
+MEMORY="$(cfg "$OLD" memory)"
 
 M_OLD="/var/lib/lxc/${OLD}/rootfs"
 M_NEW="/var/lib/lxc/${TEMP}/rootfs"
@@ -144,7 +229,9 @@ M_NEW="/var/lib/lxc/${TEMP}/rootfs"
 echo "Old CT:     $OLD"
 echo "Temp CT:    $TEMP"
 echo "New image:  $NEW_OCI"
-echo "Rootfs ref: $ROOTFS_LINE (using storage ${STORAGE}, size ${SIZE})"
+echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${STORAGE}:${SIZE}"
+[[ -n "$MEMORY" ]] && echo "Memory MB:  ${MEMORY}  (copied to temp CT create)"
+echo "PVE node:   $(pve_local_node)  (for pvesh create when using oci://)"
 echo ""
 
 pct stop "$OLD"
@@ -178,19 +265,7 @@ fi
 if pct config "$TEMP" &>/dev/null; then
   echo "Temp CT $TEMP already exists; reusing (will stop and refresh from image)." >&2
 else
-  create_args=(
-    pct create "$TEMP" "$NEW_OCI"
-    --hostname "${HOST:-oci-refresh-temp}"
-    --rootfs "${STORAGE}:${SIZE}"
-    --onboot 0
-  )
-  [[ -n "$OSTYPE" ]] && create_args+=( --ostype "$OSTYPE" )
-  [[ -n "$UNPRIV" ]] && create_args+=( --unprivileged "$UNPRIV" )
-  [[ -n "$ARCH" ]] && create_args+=( --arch "$ARCH" )
-  [[ -n "$FEATURES" ]] && create_args+=( --features "$FEATURES" )
-  # Minimal valid net; replace with copying net0 from $OLD if you use static IP for create.
-  create_args+=( --net0 name=eth0,bridge=vmbr0,ip=dhcp )
-  "${create_args[@]}"
+  create_temp_ct
 fi
 
 pct stop "$TEMP"
