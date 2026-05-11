@@ -341,15 +341,28 @@ if [[ ! -d "$M_OLD" || ! -d "$M_NEW" ]]; then
   exit 1
 fi
 
+# pct config can contain bytes grep treats as "binary" → no matches → no excludes.
+# Without excludes, rsync --delete hits bind-mount dirs under pct mount → "rmdir(data0): Device or resource busy".
 excludes=()
 while IFS= read -r line; do
-  [[ "$line" == *mp=* ]] || continue
-  if [[ "$line" =~ mp=([^,]+) ]]; then
+  [[ "$line" =~ ^mp[0-9]+: ]] || continue
+  cpath=""
+  if [[ "$line" =~ ,mp=([^,]+) ]]; then
     cpath="${BASH_REMATCH[1]}"
-    [[ "$cpath" == /* ]] || cpath="/$cpath"
-    excludes+=( --exclude="${cpath#/}" )
+  elif [[ "$line" =~ mp=([^,]+) ]]; then
+    cpath="${BASH_REMATCH[1]}"
   fi
-done < <(pct config "$OLD" | grep -E '^mp[0-9]+:' || true)
+  [[ -n "$cpath" ]] || continue
+  [[ "$cpath" == /* ]] || cpath="/$cpath"
+  rel="${cpath#/}"
+  excludes+=( --exclude="${rel}" --exclude="${rel%/}/" )
+done < <(pct config "$OLD" | LC_ALL=C grep -aE '^mp[0-9]+:' || true)
+
+if [[ ${#excludes[@]} -gt 0 ]]; then
+  echo "rsync excludes for bind-mount paths (mp=): ${excludes[*]}"
+else
+  echo "rsync excludes: (none — no mp lines found on CT ${OLD}; bind mounts under pct mount would break --delete without excludes)"
+fi
 
 echo "Syncing new root -> old root (rsync)..."
 rsync -aHAX --delete "${excludes[@]}" "${M_NEW}/" "${M_OLD}/"
