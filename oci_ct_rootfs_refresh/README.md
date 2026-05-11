@@ -2,7 +2,7 @@
 
 Proxmox VE 9.1+ can create LXC containers from **OCI** images (`oci://…`). There is no single built-in “upgrade this CT to a newer image digest” action yet. This script automates a practical pattern:
 
-1. **Stop** the **existing** CT (same CTID, hostname, network, and **`mpX` bind mounts** stay in its config).
+1. **Stop** the **existing** CT if it is **running or frozen** (if it is already stopped, this step is skipped). The CT does **not** need to be running when you start the script; it only needs to be **stopped** before snapshot and `pct mount`. Same CTID, hostname, network, and **`mpX` bind mounts** stay in its config.
 2. **`pct snapshot`** on that CT (required to succeed by default; quick rollback before any rsync).
 3. Create a **temporary** CT from the **new** OCI image.
 4. **Mount** both roots on the host and **`rsync`** the new root tree onto the old CT’s **rootfs** (with optional excludes for bind-mount paths inside the root volume).
@@ -28,7 +28,7 @@ chmod +x oci-ct-refresh-rootfs.sh   # once
 
 | Option | Description |
 |--------|-------------|
-| *(default)* | After stopping the CT, run **`pct snapshot`**. If it **fails**, the script **exits** (no rsync) so you never refresh without a rollback point. |
+| *(default)* | After ensuring the CT is stopped (calls **`pct stop`** only when status is running/frozen), run **`pct snapshot`**. If it **fails**, the script **exits** (no rsync) so you never refresh without a rollback point. |
 | `--allow-failed-snapshot` | Still run `pct snapshot`, but **continue** if it fails (e.g. directory storage, or a transient error you accept). |
 | `--no-snapshot` | **Skip** `pct snapshot` entirely (lab only, or you handled backup/snapshot elsewhere). |
 

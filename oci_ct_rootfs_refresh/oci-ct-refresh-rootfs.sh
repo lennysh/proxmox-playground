@@ -112,6 +112,13 @@ cfg() {
   pct config "$1" | sed -n "s/^$2: //p" | head -1
 }
 
+# True if CT should be stopped (running or frozen). The script only needs CT stopped, not "was running".
+pct_ct_needs_stop() {
+  local s
+  s=$(pct status "$1" 2>/dev/null || true)
+  [[ "$s" == *running* || "$s" == *frozen* ]]
+}
+
 # pct create --rootfs for a NEW disk: STORAGE:<GiB_integer> (e.g. Storage:8, local-zfs:32).
 # Using STORAGE:1G is wrong: ZFS/LVM treat "1G" as a volume name → "unable to parse zfs volume name '1G'".
 rootfs_alloc_for_pct_create() {
@@ -286,7 +293,14 @@ echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${ROOTFS_NEWVOL}  (
 echo "This host:  $(hostname -s)  (run script on the node that owns CT ${OLD})"
 echo ""
 
-pct stop "$OLD"
+echo "--- CT ${OLD} must be stopped for snapshot + pct mount (need not have been running) ---"
+if pct_ct_needs_stop "$OLD"; then
+  echo "Stopping CT ${OLD} (pct status: running or frozen)..."
+  pct stop "$OLD"
+else
+  echo "CT ${OLD} already stopped (or not active); skipping pct stop."
+fi
+echo ""
 
 # Proxmox integrates pct snapshot with snapshot-capable rootfs/mp storages (e.g. ZFS).
 # Bind-mount host paths are not part of the root volume; snapshot mainly covers managed volumes.
