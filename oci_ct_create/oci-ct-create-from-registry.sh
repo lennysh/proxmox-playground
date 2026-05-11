@@ -18,9 +18,9 @@ Usage: oci-ct-create-from-registry.sh [options]
 Required (omit when using --list-template-storages):
   --storage ID          Optional. Same as the UI: Datacenter → Storage id where **vztmpl**
                         (Container templates) lives — **dir** / **nfs** / **cifs**, not zfspool.
-                        If omitted or invalid for oci-registry-pull, the script **lists** candidates
-                        and exits 2 (re-run with --storage <id>).
-                        Explicit list:  --list-template-storages
+                        If omitted: **auto-picks** when exactly one candidate exists on this node;
+                        otherwise **lists** candidates and exits 2. If set but invalid, same list + exit 2.
+                        Explicit list only:  --list-template-storages
   --reference REF       OCI image reference for the API (e.g. docker.io/library/nginx:latest)
   --rootfs SPEC         New CT root disk: STORAGE:GiB_integer (e.g. Storage:8) — often your zfspool
 
@@ -113,7 +113,8 @@ EOF
     | (.type // "?") as $t
     | (
         if (.path // "") != "" then .path
-        elif (.server // "") != "" then ("nfs " + .server + " " + (.export // ""))
+        elif ((.server // .address // "") | length) > 0 then
+          "nfs " + (.server // .address) + " " + (.export // .exportpath // "")
         else "—"
         end
       ) as $hint
@@ -226,17 +227,49 @@ template_storage_valid_for_oci_pull() {
   [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]]
 }
 
+# One storage id per line: vztmpl + type dir|nfs|cifs on this node (same rule as oci-registry-pull).
+oci_pull_template_storage_ids() {
+  local json="${STORAGE_JSON_CACHED:-}"
+  printf '%s\n' "$json" | jq -r '
+    def unwrap: if type == "string" and test("^\\s*\\{") then fromjson else . end;
+    def pve_array:
+      if type == "array" then .
+      elif type == "object" and (.data != null) then
+        (.data | if type == "array" then . else [.] end)
+      else [] end;
+    def has_vztmpl: (.content // "") | test("vztmpl");
+    unwrap | pve_array
+    | map(select(has_vztmpl)
+        | select((.type // "") == "dir" or (.type // "") == "nfs" or (.type // "") == "cifs"))
+    | (.[] | (.storage // .storeid // .id) // empty)
+  ' | sort -u | sed '/^$/d;/^null$/d'
+}
+
 pick_template_storage_or_exit() {
   load_node_storage_json
   STORAGE="${STORAGE#"${STORAGE%%[![:space:]]*}"}"
   STORAGE="${STORAGE%"${STORAGE##*[![:space:]]}"}"
   if [[ -z "$STORAGE" ]]; then
-    echo "--storage not set. Storages on node '${NODE}' that can host OCI template pulls (vztmpl + dir|nfs|cifs):" >&2
-    echo >&2
-    list_template_storages
-    echo >&2
-    echo "Re-run with:  --storage <storage id from above where oci-registry-pull is yes>" >&2
-    exit 2
+    local -a cands=()
+    mapfile -t cands < <(oci_pull_template_storage_ids)
+    if [[ "${#cands[@]}" -eq 1 ]]; then
+      STORAGE="${cands[0]}"
+      echo "Note: auto-selected --storage '${STORAGE}' (only vztmpl+oci-registry-pull candidate on node '${NODE}')." >&2
+    elif [[ "${#cands[@]}" -eq 0 ]]; then
+      echo "No storage on node '${NODE}' is usable for oci-registry-pull (need vztmpl + type dir, nfs, or cifs)." >&2
+      echo >&2
+      list_template_storages
+      echo >&2
+      echo "Enable **Container template** on a dir/nfs/cifs store, then re-run (or pass --storage explicitly)." >&2
+      exit 2
+    else
+      echo "--storage not set; multiple OCI template candidates on node '${NODE}' — pick one:" >&2
+      echo >&2
+      list_template_storages
+      echo >&2
+      echo "Re-run with:  --storage <storage id from above where oci-registry-pull is yes>" >&2
+      exit 2
+    fi
   fi
   if ! template_storage_valid_for_oci_pull "$STORAGE"; then
     echo "Invalid --storage '${STORAGE}' for oci-registry-pull (not found on this node, or no vztmpl, or type is not dir/nfs/cifs)." >&2

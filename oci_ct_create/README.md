@@ -60,7 +60,7 @@ Template-only download (no CT):
 
 | Option | Meaning |
 |--------|--------|
-| `--storage ID` | **Optional.** Template / vztmpl storage id (same as Datacenter → Storage in the UI). If omitted, or not usable for **`oci-registry-pull`** on this node (no **vztmpl**, or type not **dir**/**nfs**/**cifs**), the script **prints the candidate list** and exits **2** — re-run with **`--storage <id>`** from that list. |
+| `--storage ID` | **Optional.** Template / vztmpl storage id (same as Datacenter → Storage in the UI). If omitted and **exactly one** node storage matches vztmpl + dir\|nfs\|cifs, that id is **auto-selected**. If **zero** or **multiple** matches, the script **prints the list** and exits **2**. If you pass an id that does not match, same list + exit **2**. |
 | `--list-template-storages` | Lists node storages that include **vztmpl** and marks which accept **`oci-registry-pull`** (same rule as the UI). No other flags required. |
 | `--reference REF` | Image reference for the API (e.g. `docker.io/library/alpine:3.21`). Leading `oci://` or `docker://` is stripped. |
 | `--rootfs SPEC` | New CT disk: **`STORAGE:GiB`** integer (e.g. `local-zfs:8`). Not used with **`--pull-only`**. |
