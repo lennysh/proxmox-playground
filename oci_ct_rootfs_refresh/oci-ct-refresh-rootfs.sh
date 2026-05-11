@@ -112,34 +112,64 @@ cfg() {
   pct config "$1" | sed -n "s/^$2: //p" | head -1
 }
 
-# Short hostname must match the cluster node name for pvesh /nodes/<node>/...
-pve_local_node() {
-  hostname -s
-}
-
-# `pct create <vmid> <ostemplate>` splits the template on the first ':' like storage:volume.
-# An OCI ref `oci://registry/...` is misread as storage id "oci" → "storage 'oci' does not exist".
-# Passing ostemplate through the API (pvesh) keeps the full string intact.
+# Proxmox treats <ostemplate> like "STORAGE:volume" and splits on the first ':' (pct, pvesh, API).
+# So `oci://registry/...` becomes storage id `oci` → "storage 'oci' does not exist".
+# Workaround: skopeo copy docker://REF oci-archive:FILE.tar then pct create VMID /path/file.tar
 create_temp_ct() {
-  local -a cmd
-  local node net0="${OCI_REFRESH_TEMP_NET0:-name=eth0,bridge=vmbr0,ip=dhcp}"
+  local -a cmd skopeo_args
+  local net0="${OCI_REFRESH_TEMP_NET0:-name=eth0,bridge=vmbr0,ip=dhcp}"
+  local archive ref tmpdir
 
   if [[ "$NEW_OCI" == oci://* ]]; then
-    node="$(pve_local_node)"
-    echo "--- Create temp CT ${TEMP} from OCI (pvesh API; avoids pct + oci:// colon bug) ---"
-    echo "PVE node:    ${node}  (from hostname -s; must match /nodes/<name> for this host)"
-    echo "Ostemplate:  ${NEW_OCI}"
-    echo "Rootfs new: ${STORAGE}:${SIZE}"
-    echo "Hostname:    ${HOST:-oci-refresh-temp}"
-    [[ -n "$MEMORY" ]] && echo "Memory MB:   ${MEMORY}  (copied from CT ${OLD})"
-    echo "Net (temp):  ${net0}"
-    echo "  (override temp net with env OCI_REFRESH_TEMP_NET0='name=eth0,bridge=vmbr1,ip=dhcp' if needed)"
+    ref="${NEW_OCI#oci://}"
+    tmpdir="${OCI_REFRESH_TMPDIR:-/var/tmp}"
+
+    echo "--- Create temp CT ${TEMP} from OCI (skopeo + local tar → pct create) ---"
+    echo "Why: Proxmox splits ostemplate on the first ':'; 'oci://…' is misread as storage 'oci' (pct and pvesh)."
+    echo "     This path pulls with skopeo then passes a plain filesystem path to pct (no oci:// in ostemplate)."
+    echo
+    echo "Image (normalized): ${NEW_OCI}"
+    echo "Skopeo source:      docker://${ref}"
+    echo "Temp archive dir:   ${tmpdir}  (set OCI_REFRESH_TMPDIR to override; needs ~2× image size free space)"
+    echo "Rootfs new vol:     ${STORAGE}:${SIZE}"
+    echo "Hostname:           ${HOST:-oci-refresh-temp}"
+    [[ -n "$MEMORY" ]] && echo "Memory MB:          ${MEMORY}"
+    echo "Net (temp):         ${net0}"
+    echo "Skopeo verbosity:   set OCI_REFRESH_SKOPEO_VERBOSE=1 for full skopeo copy progress"
     echo
 
+    if ! command -v skopeo >/dev/null 2>&1; then
+      echo "skopeo is required for oci:// temp CTs on current Proxmox (colon parsing bug)." >&2
+      echo "Install on the PVE node, e.g.: apt install skopeo" >&2
+      exit 1
+    fi
+    if [[ ! -d "$tmpdir" || ! -w "$tmpdir" ]]; then
+      echo "Temp dir not writable: ${tmpdir}" >&2
+      exit 1
+    fi
+
+    archive="${tmpdir}/oci-refresh-${TEMP}-$$-${RANDOM}.tar"
+    skopeo_args=()
+    [[ "${OCI_REFRESH_SKOPEO_VERBOSE:-0}" != 1 ]] && skopeo_args+=(--quiet)
+
+    echo -n "Step 1/2: skopeo copy"
+    [[ ${#skopeo_args[@]} -gt 0 ]] && echo -n " ${skopeo_args[*]}"
+    echo " docker://${ref} oci-archive:${archive}"
+    if ! skopeo copy "${skopeo_args[@]}" "docker://${ref}" "oci-archive:${archive}"; then
+      echo "=== skopeo copy failed ===" >&2
+      echo "Hints: outbound HTTPS; auth for ghcr.io → skopeo login ghcr.io (or /root/.config/containers/auth.json)" >&2
+      rm -f "$archive"
+      exit 1
+    fi
+    ls -lh "$archive" 2>/dev/null || stat "$archive" 2>/dev/null || true
+    echo
+
+    cleanup_oci_tar() { rm -f "$archive"; }
+    trap 'cleanup_oci_tar' EXIT
+
+    echo "Step 2/2: pct create from local OCI archive"
     cmd=(
-      pvesh create "/nodes/${node}/lxc"
-      --vmid "$TEMP"
-      --ostemplate "$NEW_OCI"
+      pct create "$TEMP" "$archive"
       --hostname "${HOST:-oci-refresh-temp}"
       --rootfs "${STORAGE}:${SIZE}"
       --onboot 0
@@ -155,15 +185,13 @@ create_temp_ct() {
     printf ' '; printf '%q ' "${cmd[@]}"; echo; echo
 
     if ! "${cmd[@]}"; then
-      echo "=== Temp CT create failed ===" >&2
-      echo >&2 "Checks:" >&2
-      echo >&2 "  • Node '${node}' — run on the Proxmox node that owns the CT; 'hostname -s' must match a /nodes/<name> entry (see: pvesh get /nodes)." >&2
-      echo >&2 "  • Storage '${STORAGE}' — must exist and support rootdir: pvesh get /storage --output-format json | jq ." >&2
-      echo >&2 "  • VMID ${TEMP} — must be unused cluster-wide: pvesh get /cluster/nextid" >&2
-      echo >&2 "  • If you ever saw 'storage '\''oci'\'' does not exist': old 'pct create ... oci://...' parsed 'oci' as a storage; this script uses pvesh for oci:// (update your copy)." >&2
-      echo >&2 "  • Shell trace: bash -x \"$0\" ... (same args you used)." >&2
+      echo "=== pct create from OCI archive failed ===" >&2
+      echo "Check: storage '${STORAGE}' rootdir-capable, VMID ${TEMP} free, archive still at ${archive}" >&2
       exit 1
     fi
+
+    rm -f "$archive"
+    trap - EXIT
   else
     echo "--- Create temp CT ${TEMP} (pct; local template path / vztmpl) ---"
     cmd=(
@@ -231,7 +259,7 @@ echo "Temp CT:    $TEMP"
 echo "New image:  $NEW_OCI"
 echo "Rootfs ref: $ROOTFS_LINE  →  new temp disk: --rootfs ${STORAGE}:${SIZE}"
 [[ -n "$MEMORY" ]] && echo "Memory MB:  ${MEMORY}  (copied to temp CT create)"
-echo "PVE node:   $(pve_local_node)  (for pvesh create when using oci://)"
+echo "This host:  $(hostname -s)  (run script on the node that owns CT ${OLD})"
 echo ""
 
 pct stop "$OLD"
