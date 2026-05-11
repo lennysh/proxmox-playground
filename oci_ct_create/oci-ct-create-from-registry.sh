@@ -9,6 +9,8 @@
 #
 # Reference format matches the UI/API: e.g. docker.io/library/nginx:latest,
 # ghcr.io/org/image:tag. A leading oci:// or docker:// prefix is stripped before pull.
+# Floating :latest (or any ref that normalizes to *_latest) is resolved before pull so
+# the vztmpl .tar name is never the ambiguous *_latest form (see README).
 set -euo pipefail
 
 usage() {
@@ -42,8 +44,14 @@ Additional volumes (mount points inside the CT; new disks on STORAGE):
                         → pct --mp0 STORAGE:SIZE,mp=/path  (mp1, mp2, … in order)
 
 Pull behaviour:
-  --skip-pull           Do not call oci-registry-pull; use an already-downloaded template
+  --skip-pull           Do not call oci-registry-pull; use an already-downloaded template (must match
+                        the normalized vztmpl name for the **resolved** ref after any :latest pinning)
   --reuse-local-template If normalized .tar already exists under vztmpl, skip pull
+
+Floating :latest:
+  Refs ending in :latest (case-insensitive), or whose normalized vztmpl basename ends in _latest,
+  are resolved via skopeo inspect to a concrete image ref so the stored template is not *_latest.tar.
+  Disable: env OCI_CT_CREATE_NO_RESOLVE_LATEST=1
 
 Other:
   --list-template-storages  Print storages on this node that include vztmpl (Container templates)
@@ -301,6 +309,53 @@ strip_oci_scheme() {
 
 REFERENCE="$(strip_oci_scheme "$REFERENCE")"
 
+# True when the ref would produce normalize_content_filename ending in _latest (ambiguous tarball).
+is_floating_latest_ref() {
+  local ref="$1" norm
+  ref="${ref,,}"
+  if [[ "$ref" == *:latest ]]; then
+    return 0
+  fi
+  norm="$(normalize_content_filename "$1")"
+  [[ "$norm" =~ _latest$ ]]
+}
+
+# Resolve :latest / *_latest-style refs to a deterministic pull ref (non-latest tag or name@digest).
+resolve_floating_latest_ref() {
+  local ref="$1" json json_at name digest picked
+  if [[ -n "${OCI_CT_CREATE_NO_RESOLVE_LATEST:-}" ]]; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  if ! is_floating_latest_ref "$ref"; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  command -v skopeo >/dev/null 2>&1 || die "skopeo is required to resolve :latest / *_latest refs (or set OCI_CT_CREATE_NO_RESOLVE_LATEST=1)."
+  json=$(skopeo inspect "docker://${ref}" 2>/dev/null) || die "skopeo inspect failed for docker://${ref}"
+  name=$(printf '%s\n' "$json" | jq -r '.Name // empty')
+  digest=$(printf '%s\n' "$json" | jq -r '.Digest // empty')
+  [[ -n "$name" && -n "$digest" ]] || die "skopeo inspect returned no Name/Digest for docker://${ref}"
+
+  picked=""
+  json_at=$(skopeo inspect "docker://${name}@${digest}" 2>/dev/null) || json_at=""
+  if [[ -n "$json_at" ]]; then
+    picked=$(printf '%s\n' "$json_at" | jq -r '(.RepoTags // [])[]' \
+      | awk 'tolower($0) != "latest"' | sort -V | tail -n1)
+  fi
+
+  if [[ -n "$picked" ]]; then
+    echo "Resolved floating tag to same-digest ref: ${name}:${picked}" >&2
+    printf '%s\n' "${name}:${picked}"
+    return 0
+  fi
+
+  echo "No non-latest RepoTag for this manifest; using digest ref (direct skopeo copy if the API rejects @sha256)." >&2
+  printf '%s\n' "${name}@${digest}"
+}
+
+PULL_REFERENCE="$(resolve_floating_latest_ref "$REFERENCE")"
+
 # Host path under vztmpl exists only for storages with a directory-style layout (e.g. "dir", some NFS).
 # ZFS pools, LVM-thin, RBD, etc. return "storage definition has no path" from get_vztmpl_dir — that is normal.
 vztmpl_host_dir_for_storage() {
@@ -432,40 +487,77 @@ wait_for_task() {
   die "Timed out waiting for task ${upid} (${max}s)"
 }
 
+# When oci-registry-pull rejects name@sha256 (API regex is :tag-only on some PVE versions), copy to the
+# same path the worker would have used so OSTEMPLATE / NORM stay consistent.
+skopeo_copy_digest_ref_to_local_tar() {
+  local ref="$1"
+  [[ -n "${LOCAL_TAR:-}" ]] || die "Internal error: skopeo_copy_digest_ref_to_local_tar without LOCAL_TAR."
+  [[ "$ref" == *@sha256:* ]] || die "Internal error: skopeo_copy_digest_ref_to_local_tar expects @sha256 ref."
+  local tmp="${LOCAL_TAR}.pulltmp.${BASHPID}"
+  rm -f "$tmp"
+  skopeo copy "docker://${ref}" "oci-archive:${tmp}"
+  mv -f "$tmp" "$LOCAL_TAR"
+}
+
 oci_registry_pull() {
   local ref="$1" out upid
   echo "--- oci-registry-pull (same API as Proxmox UI) ---"
   echo "Node:     ${NODE}"
   echo "Storage:  ${STORAGE}"
-  echo "Reference: ${ref}"
+  if [[ "${REFERENCE}" != "${PULL_REFERENCE}" ]]; then
+    echo "User reference: ${REFERENCE}"
+  fi
+  echo "Pull reference: ${ref}"
   echo
 
   out=$(pvesh create "/nodes/${NODE}/storage/${STORAGE}/oci-registry-pull" \
-    --reference "$ref" --output-format json 2>&1) || {
-    echo "$out" >&2
-    if echo "$out" | grep -qiE 'not a file based storage|zfspool'; then
-      echo >&2
-      echo "oci-registry-pull only supports the same storages the UI can write an OCI .tar to (dir, nfs, cifs, …), not zfspool." >&2
-      echo "Pass the Datacenter → Storage **id** where your Container templates path lives (vztmpl on your mount), not your CT disk pool:" >&2
-      echo "  $0 --list-template-storages" >&2
-      echo "Then e.g.:  --storage <that-id> --reference ${ref} --rootfs Storage:8 ..." >&2
-    else
-      echo "Hint: storage '${STORAGE}' must have vztmpl content; skopeo must exist at /usr/bin/skopeo; PVE must expose oci-registry-pull." >&2
-    fi
-    die "pvesh oci-registry-pull failed."
+    --reference "$ref" --output-format json 2>&1) && {
+    upid="$(parse_upid_from_create_response "$out" || true)"
+    [[ -n "$upid" ]] || die "Could not parse UPID from pvesh output (expected JSON with .data or a UPID: line): $out"
+    echo "Worker UPID: ${upid}"
+    echo "Waiting for pull to finish..."
+    wait_for_task "$upid"
+    echo "Pull completed OK."
+    echo
+    return 0
   }
 
-  upid="$(parse_upid_from_create_response "$out" || true)"
-  [[ -n "$upid" ]] || die "Could not parse UPID from pvesh output (expected JSON with .data or a UPID: line): $out"
+  echo "$out" >&2
+  # skopeo refuses to overwrite an existing oci-archive; treat as success if our ostemplate is already there.
+  if echo "$out" | grep -qiE 'refusing to override|existing file|file already exists|already exists'; then
+    if [[ -n "${LOCAL_TAR:-}" && -f "$LOCAL_TAR" ]] || storage_has_ostemplate_volid; then
+      echo "Template ${OSTEMPLATE} already on storage; skipping pull (delete or rename that .tar in vztmpl to force a re-download)." >&2
+      echo >&2
+      return 0
+    fi
+  fi
 
-  echo "Worker UPID: ${upid}"
-  echo "Waiting for pull to finish..."
-  wait_for_task "$upid"
-  echo "Pull completed OK."
-  echo
+  if [[ "$ref" == *@sha256:* && -n "${LOCAL_TAR:-}" ]]; then
+    if echo "$out" | grep -qiE 'parameter verification|invalid|does not match|malformed|bad request'; then
+      echo "oci-registry-pull rejected digest-shaped reference; copying with skopeo to ${LOCAL_TAR} ..." >&2
+      skopeo_copy_digest_ref_to_local_tar "$ref"
+      echo "Direct skopeo copy completed." >&2
+      echo >&2
+      return 0
+    fi
+  fi
+
+  if echo "$out" | grep -qiE 'not a file based storage|zfspool'; then
+    echo >&2
+    echo "oci-registry-pull only supports the same storages the UI can write an OCI .tar to (dir, nfs, cifs, …), not zfspool." >&2
+    echo "Pass the Datacenter → Storage **id** where your Container templates path lives (vztmpl on your mount), not your CT disk pool:" >&2
+    echo "  $0 --list-template-storages" >&2
+      echo "Then e.g.:  --storage <that-id> --reference ${REFERENCE} --rootfs Storage:8 ..." >&2
+  elif [[ "$ref" == *@sha256:* ]]; then
+    echo "Digest ref pull failed and there is no host vztmpl path for a direct skopeo copy." >&2
+    echo "Use an explicit version tag, a registry that lists non-latest tags for this manifest, or template storage with a resolvable directory path." >&2
+  else
+    echo "Hint: storage '${STORAGE}' must have vztmpl content; skopeo must exist at /usr/bin/skopeo; PVE must expose oci-registry-pull." >&2
+  fi
+  die "pvesh oci-registry-pull failed."
 }
 
-NORM="$(normalize_content_filename "$REFERENCE")"
+NORM="$(normalize_content_filename "$PULL_REFERENCE")"
 OSTEMPLATE="${STORAGE}:vztmpl/${NORM}.tar"
 LOCAL_TAR=""
 VZTDIR=""
@@ -485,10 +577,10 @@ elif [[ "$REUSE_LOCAL" -eq 1 ]]; then
   elif storage_has_ostemplate_volid; then
     echo "Reusing existing template on storage (volid ${OSTEMPLATE})."
   else
-    oci_registry_pull "$REFERENCE"
+    oci_registry_pull "$PULL_REFERENCE"
   fi
 else
-  oci_registry_pull "$REFERENCE"
+  oci_registry_pull "$PULL_REFERENCE"
 fi
 
 if [[ -n "$LOCAL_TAR" && -f "$LOCAL_TAR" ]]; then

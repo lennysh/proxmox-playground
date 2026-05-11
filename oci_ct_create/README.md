@@ -62,7 +62,8 @@ Template-only download (no CT):
 |--------|--------|
 | `--storage ID` | **Optional.** Template / vztmpl storage id (same as Datacenter → Storage in the UI). If omitted and **exactly one** node storage matches vztmpl + dir\|nfs\|cifs, that id is **auto-selected**. If **zero** or **multiple** matches, the script **prints the list** and exits **2**. If you pass an id that does not match, same list + exit **2**. |
 | `--list-template-storages` | Lists node storages that include **vztmpl** and marks which accept **`oci-registry-pull`** (same rule as the UI). No other flags required. |
-| `--reference REF` | Image reference for the API (e.g. `docker.io/library/alpine:3.21`). Leading `oci://` or `docker://` is stripped. |
+| `--reference REF` | Image reference for the API (e.g. `docker.io/library/alpine:3.21`). Leading `oci://` or `docker://` is stripped. Floating `:latest` is resolved before pull (see below). |
+| *(env)* `OCI_CT_CREATE_NO_RESOLVE_LATEST=1` | Keep `--reference` exactly as given (including `:latest` and `*_latest.tar` names). |
 | `--rootfs SPEC` | New CT disk: **`STORAGE:GiB`** integer (e.g. `local-zfs:8`). Not used with **`--pull-only`**. |
 | `--vmid ID` | Optional; default is cluster next free (`pvesh get /cluster/nextid`). |
 | `--hostname` | Optional; default `oci-ct-<vmid>`. |
@@ -89,6 +90,27 @@ Current script behaviour:
 - It **does not abort** anymore; it lists **`/nodes/<node>/storage/<storage>/content`** until **`STORAGE:vztmpl/<normalized>.tar`** appears (after **`oci-registry-pull`**), then runs **`pct create`** with that volid.
 
 **Note:** Proxmox’s **`oci-registry-pull`** API **rejects `zfspool`** for the pull target. That is a product limitation, not this script. Use **`--list-template-storages`** to pick the template storage id (same as the UI), and **`--rootfs` / `--mp`** for ZFS (or any) CT disks.
+
+## Floating `:latest` and template filenames
+
+Proxmox names the vztmpl tarball from **`normalize_content_filename(reference)`**. A **`…:latest`** ref therefore becomes **`…_latest.tar`**, which does not tell you which build you have and makes “skip pull on existing file” unsafe when the registry moves **`latest`**.
+
+Before **`oci-registry-pull`**, this script detects “floating latest” when:
+
+- the ref ends in **`:latest`** (case-insensitive), or  
+- **`normalize_content_filename`** would end in **`_latest`**
+
+and then:
+
+1. Runs **`skopeo inspect`** on your ref, then **`skopeo inspect`** on **`name@digest`** for that manifest.  
+2. If the registry lists any **non-`latest`** tag for that digest, it picks the **highest `sort -V`** tag and pulls **`name:thatTag`** (API-friendly **`:tag`** form, human-readable tarball name).  
+3. Otherwise it uses **`name@sha256:…`** for the pull. Proxmox’s API regex is **`:tag`-only** on some versions, so if **`pvesh`** rejects that reference **and** the template storage has a resolvable host vztmpl directory, the script falls back to **`skopeo copy`** straight to the same **`.tar`** path **`oci-registry-pull`** would have produced (same **`NORM`** as from Perl **`normalize_content_filename`** on the digest ref).
+
+To keep legacy behaviour (no resolution), set **`OCI_CT_CREATE_NO_RESOLVE_LATEST=1`**.
+
+## Existing template `.tar` (refusing to override)
+
+If **`oci-registry-pull`** fails with **refusing to override existing file** (or similar), **`skopeo`** will not replace an **`oci-archive`** that already exists. If the expected **`STORAGE:vztmpl/<normalized>.tar`** is already present, this script **skips the pull** and continues with **`pct create`** using that template. With floating **`latest`** resolved as above, “existing file” now matches a **specific tag or digest-shaped name**, not a stale ambiguous **`_latest`** file. To force a fresh download, remove or rename the existing **`.tar`** in that storage’s vztmpl area (Datacenter → Storage → the template store → content), then re-run.
 
 ## Implementation notes
 
