@@ -2,6 +2,16 @@
 
 Summarize Proxmox **vzdump** task logs so you can see which guests failed without scrolling through progress lines.
 
+## Directory structure
+
+```
+backup-summary/
+├── README.md
+├── scripts/
+│   └── summarize-vzdump-log.sh
+└── example-logs/          # Sample task logs for testing
+```
+
 ## Script
 
 ```bash
@@ -30,3 +40,8 @@ Exit code **2** if there were failures, incomplete backups, or `TASK ERROR:`.
 ```
 
 Example logs live under `example-logs/` for testing.
+
+## See also
+
+- [Root README](../README.md) — repository overview
+- [FILE_INDEX.md](../docs/FILE_INDEX.md) — navigation guide

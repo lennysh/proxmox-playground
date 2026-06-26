@@ -1,11 +1,11 @@
-# Contributing to lennysh-proxmox-scripts
+# Contributing to proxmox-playground
 
 Thank you for interest in contributing! This guide explains how to add new scripts and collections to this repository.
 
 ## Repository Structure
 
 ```
-lennysh-proxmox-scripts/
+proxmox-playground/
 ├── README.md                    # Main repository overview
 ├── CONTRIBUTING.md              # This file
 ├── docs/                        # Root documentation

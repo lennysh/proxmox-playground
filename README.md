@@ -1,11 +1,13 @@
-# lennysh-proxmox-scripts
+# proxmox-playground
 
-A collection of useful bash scripts and utilities for ProxMox administration.
+A collection of useful bash scripts and utilities for Proxmox administration.
+
+**Repository:** [github.com/lennysh/proxmox-playground](https://github.com/lennysh/proxmox-playground)
 
 ## 📁 Repository Structure
 
 ```
-lennysh-proxmox-scripts/
+proxmox-playground/
 ├── README.md                           # This file
 ├── docs/                               # Root-level documentation
 │   ├── FILE_INDEX.md                   # Navigation guide
@@ -66,6 +68,21 @@ sudo ./scripts/import-qcow2-zfs.sh -v 101 -i ./debian.qcow2 --boot
 
 See [vm-import/README.md](vm-import/README.md) for complete documentation.
 
+### Backup Log Summary
+Summarize Proxmox vzdump task logs to find failed or incomplete backups:
+
+```bash
+cd backup-summary
+
+# Full summary
+./scripts/summarize-vzdump-log.sh /path/to/task-UPID.log
+
+# Compact: failures and job result only
+./scripts/summarize-vzdump-log.sh --errors-only /path/to/task-UPID.log
+```
+
+See [backup-summary/README.md](backup-summary/README.md) for complete documentation.
+
 ## 📚 Collections
 
 ### [docker-zvol](docker-zvol/) - Docker Storage Management
@@ -108,10 +125,25 @@ Import qcow2/raw/vmdk disk images into Proxmox VMs on ZFS storage.
 **Documentation:**
 - [vm-import/README.md](vm-import/README.md) - Overview and usage
 
+### [backup-summary](backup-summary/) - vzdump Log Summary
+Parse Proxmox vzdump task logs for failed backups, incomplete VMs, and job errors.
+
+**Includes:**
+- summarize-vzdump-log.sh - Parse and summarize task logs
+- example-logs/ - Sample logs for testing
+
+**Key Features:**
+- Detects definitive backup failures and incomplete jobs
+- Compact `--errors-only` mode for scripts and cron
+- Optional `--warnings` for non-fatal ERROR lines
+- Exit code 2 when problems are found
+
+**Documentation:**
+- [backup-summary/README.md](backup-summary/README.md) - Overview and usage
+
 ### Future Collections
-More script collections will be added for:
+More script collections may be added for:
 - LXC container management
-- Backup and restore utilities
 - Monitoring and alerting
 - Networking utilities
 - Storage management
@@ -124,9 +156,11 @@ More script collections will be added for:
 - **[PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md)** - Overall project information
 
 ### Collection-Specific Documentation
-Each collection has its own documentation:
+Each collection has its own README:
 - [docker-zvol/README.md](docker-zvol/README.md) - Docker ZVol overview
 - [docker-zvol/docs/](docker-zvol/docs/) - Detailed guides and references
+- [vm-import/README.md](vm-import/README.md) - VM disk import
+- [backup-summary/README.md](backup-summary/README.md) - vzdump log summaries
 
 ## 🎯 Common Tasks
 
@@ -162,6 +196,12 @@ cd vm-import
 sudo ./scripts/import-qcow2-zfs.sh -v 100 -i /path/to/disk.qcow2
 ```
 
+**Summarize a vzdump task log:**
+```bash
+cd backup-summary
+./scripts/summarize-vzdump-log.sh --errors-only /path/to/task-UPID.log
+```
+
 **Get help:**
 ```bash
 cd docker-zvol
@@ -171,6 +211,9 @@ cd docker-zvol
 
 cd vm-import
 ./scripts/import-qcow2-zfs.sh -h
+
+cd backup-summary
+./scripts/summarize-vzdump-log.sh --help
 ```
 
 ## 🔧 Requirements
@@ -212,22 +255,25 @@ Collection-specific requirements are listed in their README files.
 
 ## 📝 Scripts Overview
 
-### Docker-ZVol Collection
+### docker-zvol
 
-**setup-docker-zvol.sh** (447 lines)
-- Create and configure zvol for single container
-- Format, permission setup, config modification
-- All-in-one solution with validation
+| Script | Purpose |
+|--------|---------|
+| `setup-docker-zvol.sh` | Create and configure a zvol for one LXC container |
+| `manage-docker-zvols.sh` | Batch setup from a config file |
+| `zvol-utilities.sh` | Monitor, expand, and snapshot zvols |
 
-**manage-docker-zvols.sh** (312 lines)
-- Batch setup multiple containers
-- Config file driven approach
-- Execution preview and progress tracking
+### vm-import
 
-**zvol-utilities.sh** (451 lines)
-- Monitor zvol usage and health
-- Expand zvols without downtime
-- Snapshot management and diagnostics
+| Script | Purpose |
+|--------|---------|
+| `import-qcow2-zfs.sh` | Import qcow2/raw/vmdk disk images to ZFS-backed VMs |
+
+### backup-summary
+
+| Script | Purpose |
+|--------|---------|
+| `summarize-vzdump-log.sh` | Summarize vzdump task logs for failures and job status |
 
 ## 🛠️ Development
 
@@ -286,14 +332,13 @@ For each collection:
 Planned future collections:
 - [ ] LXC container utilities (create, clone, backup)
 - [ ] Storage management (pool, backup, quotas)
-- [ ] Backup and restore utilities
 - [ ] Monitoring and alerting
 - [ ] Network configuration
 - [ ] VM management utilities
 
 ---
 
-**Last Updated**: 2026-01-24  
+**Last Updated**: 2026-06-26  
 **Status**: Active Development
 
 For the latest updates, see individual collection README files.

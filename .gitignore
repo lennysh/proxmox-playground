@@ -2,7 +2,7 @@
 # ProxMox Scripts Repository - DO NOT RUN THIS FILE
 # This is a template reference for shell syntax in .gitignore
 
-# .gitignore for lennysh-proxmox-scripts
+# .gitignore for proxmox-playground
 
 # Backup files
 *.backup

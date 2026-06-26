@@ -108,3 +108,5 @@ sudo ./scripts/import-qcow2-zfs.sh -v 400 -i /mnt/nfs/vm-disk.qcow2 -s local-zfs
 
 - [Proxmox Storage: ZFS](https://pve.proxmox.com/wiki/Storage:_ZFS)
 - [qm importdisk](https://pve.proxmox.com/pve-docs/qm.1.html) - Proxmox disk import command
+- [Root README](../README.md) — repository overview
+- [FILE_INDEX.md](../docs/FILE_INDEX.md) — navigation guide
