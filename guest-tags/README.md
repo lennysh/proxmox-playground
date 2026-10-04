@@ -1,8 +1,8 @@
 # guest-tags
 
 Add Proxmox tags to QEMU VMs or LXC containers **without replacing** the existing
-tag list. The script detects guest type from cluster config, so you do not need
-to pick `qm` vs `pct`.
+tag list. The script finds the guest on **any cluster node** and updates it with
+`pvesh` (local `qm`/`pct` only see guests on the node you are on).
 
 ## Quick start
 
@@ -11,13 +11,9 @@ On any cluster node:
 ```bash
 cd guest-tags
 
-# Preview
-sudo ./scripts/add-guest-tag.sh -v 100 -t no-backup -d
+sudo ./scripts/add-guest-tag.sh -v 134 -t no-backup -d
+sudo ./scripts/add-guest-tag.sh -v 134 -t no-backup
 
-# Add (keeps any tags already on the guest)
-sudo ./scripts/add-guest-tag.sh -v 100 -t no-backup
-
-# Several guests / tags
 sudo ./scripts/add-guest-tag.sh -v 100,101 -t no-backup
 sudo ./scripts/add-guest-tag.sh -v 9000 -t backup-stop
 ```
@@ -42,22 +38,27 @@ guest-tags/
 | `--verbose` | Extra logging |
 | `-h`, `--help` | Usage |
 
-Type detection, in order:
+Type/node detection:
 
-1. `/etc/pve/qemu-server/<vmid>.conf` → QEMU (`qm set`)
-2. `/etc/pve/lxc/<vmid>.conf` → LXC (`pct set`)
-3. `pvesh get /cluster/resources --type vm` if the conf files are not visible
+1. Scan `/etc/pve/nodes/<node>/qemu-server/<vmid>.conf` and
+   `/etc/pve/nodes/<node>/lxc/<vmid>.conf` (cluster filesystem)
+2. Fall back to `pvesh get /cluster/resources --type vm`
 
-Configs live in pmxcfs, so this works from **any node** even when the guest
-runs elsewhere.
+Then: `pvesh set /nodes/<node>/{qemu|lxc}/<vmid>/config --tags …`
+
+`/etc/pve/lxc` and `/etc/pve/qemu-server` are **this node only**. Using `pct` or
+`qm` from another node produces `Configuration file 'nodes/<here>/lxc/<id>.conf'
+does not exist`.
 
 If the tag is already present, that guest is left unchanged (not an error).
+If the same VMID has configs on two nodes, the script refuses to write (clean
+up the leftover first).
 
 ## Requirements
 
 - Proxmox VE 7+
-- Root for writes (`-d` can run unprivileged if `/etc/pve` is readable)
-- `qm` / `pct` on the node
+- Root for writes
+- `pvesh` (any cluster node)
 
 ## See also
 

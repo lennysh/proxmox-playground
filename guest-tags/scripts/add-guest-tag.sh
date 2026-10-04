@@ -28,7 +28,9 @@ print_usage() {
 Usage: $0 -v <vmid>[,vmid...] -t <tag> [options]
 
 Add one or more tags to a QEMU VM or LXC container. Existing tags are kept.
-Guest type is detected from /etc/pve (cluster filesystem) on any node.
+
+Finds the guest on any cluster node via /etc/pve/nodes/*/ (pmxcfs) and updates
+it with pvesh. Do not use local qm/pct — those only see guests on this node.
 
 Required arguments:
   -v, --vmid           Guest ID (repeat or comma-separated)
@@ -95,45 +97,70 @@ append_vmids() {
     done
 }
 
-# Returns qemu or lxc on stdout.
-detect_guest_type() {
+# /etc/pve/lxc and /etc/pve/qemu-server are *local-node* views.
+# Cluster copies live under /etc/pve/nodes/<node>/{lxc,qemu-server}/.
+# Prints: <node> <qemu|lxc> <conf-path>
+find_guest() {
     local vmid="$1"
-    local qemu_conf="/etc/pve/qemu-server/${vmid}.conf"
-    local lxc_conf="/etc/pve/lxc/${vmid}.conf"
+    local -a hits=()
+    local nodedir node conf
 
-    if [[ -f "$qemu_conf" && -f "$lxc_conf" ]]; then
-        print_error "VMID $vmid has both QEMU and LXC configs"
+    if [[ -d /etc/pve/nodes ]]; then
+        for nodedir in /etc/pve/nodes/*; do
+            [[ -d "$nodedir" ]] || continue
+            node="$(basename "$nodedir")"
+            conf="${nodedir}/qemu-server/${vmid}.conf"
+            if [[ -e "$conf" ]]; then
+                hits+=("$node qemu $conf")
+            fi
+            conf="${nodedir}/lxc/${vmid}.conf"
+            if [[ -e "$conf" ]]; then
+                hits+=("$node lxc $conf")
+            fi
+        done
+    fi
+
+    if [[ ${#hits[@]} -gt 1 ]]; then
+        print_error "VMID $vmid has more than one config (possible leftover on the wrong node):"
+        local h
+        for h in "${hits[@]}"; do
+            print_error "  $h"
+        done
         return 1
     fi
-    if [[ -f "$qemu_conf" ]]; then
-        echo qemu
-        return 0
-    fi
-    if [[ -f "$lxc_conf" ]]; then
-        echo lxc
+    if [[ ${#hits[@]} -eq 1 ]]; then
+        echo "${hits[0]}"
         return 0
     fi
 
     if command -v pvesh >/dev/null 2>&1; then
-        local gtype
-        gtype="$(pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+        local found
+        found="$(pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
             | python3 -c "
 import json,sys
 vmid=int(sys.argv[1])
 data=json.load(sys.stdin)
 for item in data:
     if int(item.get('vmid') or -1)==vmid and item.get('type') in ('qemu','lxc'):
-        print(item['type'])
+        print(item.get('node',''), item['type'])
         break
 " "$vmid" || true)"
-        if [[ "$gtype" == qemu || "$gtype" == lxc ]]; then
-            echo "$gtype"
+        if [[ -n "${found// /}" ]]; then
+            echo "$found"
             return 0
         fi
     fi
 
     print_error "No QEMU VM or LXC container with VMID $vmid"
     return 1
+}
+
+api_kind() {
+    case "$1" in
+        qemu) echo qemu ;;
+        lxc) echo lxc ;;
+        *) return 1 ;;
+    esac
 }
 
 read_tags_line() {
@@ -169,22 +196,40 @@ merge_tag_list() {
 
 add_tags_to_guest() {
     local vmid="$1"
-    local gtype tool config existing new_list tag before
-    gtype="$(detect_guest_type "$vmid")"
-    if [[ "$gtype" == qemu ]]; then
-        tool=qm
-    else
-        tool=pct
+    local node gtype conf extra existing new_list tag before kind cmd
+    local locate
+
+    locate="$(find_guest "$vmid")"
+    node="$(awk '{print $1}' <<<"$locate")"
+    gtype="$(awk '{print $2}' <<<"$locate")"
+    conf="$(awk '{print $3}' <<<"$locate")"
+    kind="$(api_kind "$gtype")"
+
+    if [[ -z "$node" || -z "$gtype" ]]; then
+        print_error "Could not resolve node/type for VMID $vmid"
+        return 1
     fi
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        print_error "'$tool' not found (run this on a Proxmox node)"
+    if ! command -v pvesh >/dev/null 2>&1; then
+        print_error "pvesh is required to update guests on any cluster node"
         return 1
     fi
 
-    config="$("$tool" config "$vmid")"
-    existing="$(read_tags_line "$config")"
+    if [[ -n "$conf" && -r "$conf" ]]; then
+        existing="$(read_tags_line "$(sed '/^\[/,$d' "$conf")")"
+    else
+        extra="$(pvesh get "/nodes/${node}/${kind}/${vmid}/config" --output-format json)"
+        existing="$(python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+if isinstance(data, dict) and isinstance(data.get('data'), dict):
+    data=data['data']
+print(data.get('tags') or '')
+" <<<"$extra")"
+    fi
+
     new_list="$existing"
-    print_info "VMID $vmid is ${gtype} (using $tool)"
+    print_info "VMID $vmid is ${gtype} on node ${node}"
+    verbose "Config: ${conf:-/nodes/${node}/${kind}/${vmid}/config}"
     verbose "Current tags: ${existing:-<none>}"
 
     for tag in "${TAGS[@]}"; do
@@ -202,13 +247,14 @@ add_tags_to_guest() {
         return 0
     fi
 
+    cmd=(pvesh set "/nodes/${node}/${kind}/${vmid}/config" --tags "$new_list")
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "${YELLOW}[DRY-RUN]${NC} Would run: $tool set $vmid --tags $new_list"
+        echo -e "${YELLOW}[DRY-RUN]${NC} Would run: ${cmd[*]}"
         return 0
     fi
 
-    verbose "Running: $tool set $vmid --tags $new_list"
-    "$tool" set "$vmid" --tags "$new_list"
+    verbose "Running: ${cmd[*]}"
+    "${cmd[@]}"
     print_success "VMID $vmid tags: $new_list"
 }
 

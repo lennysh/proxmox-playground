@@ -169,7 +169,7 @@ sudo ./scripts/add-guest-tag.sh -v 100 -t no-backup
 | `import-qcow2-zfs.sh` | 405 | vm-import |
 | `summarize-vzdump-log.sh` | 167 | backup-summary |
 | `sync-backup-job-from-tags.py` | 696 | backup-tags |
-| `add-guest-tag.sh` | 272 | guest-tags |
+| `add-guest-tag.sh` | 318 | guest-tags |
 
 ---
 
