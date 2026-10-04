@@ -12,6 +12,7 @@ Bash scripts and utilities for Proxmox administration. Each collection is self-c
 | [vm-import](vm-import/) | Import qcow2/raw/vmdk disks into Proxmox VMs on ZFS | [README](vm-import/README.md) |
 | [backup-summary](backup-summary/) | Summarize vzdump task logs for failures and incomplete jobs | [README](backup-summary/README.md) |
 | [backup-tags](backup-tags/) | Rewrite a cluster backup job from VM/CT tags (opt-out + mode) | [README](backup-tags/README.md) |
+| [guest-tags](guest-tags/) | Add tags to QEMU VMs or LXC containers without replacing existing tags | [README](guest-tags/README.md) |
 
 Pick a collection, open its README, and follow the quick start there.
 
@@ -27,7 +28,8 @@ proxmox-playground/
 ├── docker-zvol/
 ├── vm-import/
 ├── backup-summary/
-└── backup-tags/
+├── backup-tags/
+└── guest-tags/
 ```
 
 ## Other documentation

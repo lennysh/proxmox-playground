@@ -10,6 +10,7 @@ Overview of the script collections in this repository.
 | [vm-import](../vm-import/) | Import qcow2/raw/vmdk disks into Proxmox VMs on ZFS | `import-qcow2-zfs.sh` |
 | [backup-summary](../backup-summary/) | Summarize vzdump task logs (failures, incomplete jobs) | `summarize-vzdump-log.sh` |
 | [backup-tags](../backup-tags/) | Rewrite a cluster vzdump job from VM/CT tags | `sync-backup-job-from-tags.py` |
+| [guest-tags](../guest-tags/) | Add tags to QEMU VMs or LXC without replacing existing tags | `add-guest-tag.sh` |
 
 Each collection is self-contained with its own README, scripts, and (where applicable) examples and docs.
 
@@ -25,7 +26,8 @@ proxmox-playground/
 ├── docker-zvol/              # Docker zvol management
 ├── vm-import/                # VM disk import
 ├── backup-summary/           # vzdump log summaries
-└── backup-tags/              # tag-driven backup job selection
+├── backup-tags/              # tag-driven backup job selection
+└── guest-tags/               # add tags to VMs and CTs
 ```
 
 ## Quick links
@@ -57,6 +59,11 @@ proxmox-playground/
 - Default policy: back up every VM/CT unless tagged `no-backup`.
 - Optional mode tags (`backup-snapshot` / `backup-suspend` / `backup-stop`);
   default mode is snapshot. One vzdump mode per job.
+
+### guest-tags highlights
+
+- Detects QEMU vs LXC from cluster config (`qm` vs `pct`).
+- Merges the new tag into the existing list (does not wipe other tags).
 
 ## Shared conventions
 

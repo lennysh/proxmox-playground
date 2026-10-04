@@ -69,8 +69,11 @@ cp examples/tag-backup.conf /root/tag-backup.conf
 ./scripts/sync-backup-job-from-tags.py --config /root/tag-backup.conf --apply --yes
 ```
 
-Tag test VMs/CTs in the UI (Datacenter → Options → Tag Style is optional).
-Then re-run the script (or a cron/timer) so the exclude list stays current.
+Tag test VMs/CTs in the UI, or use [guest-tags](../guest-tags/README.md):
+
+```bash
+sudo ../guest-tags/scripts/add-guest-tag.sh -v 100 -t no-backup
+```
 
 With **`all-except`** (the default), **new untagged guests are backed up on the
 next scheduled run without re-running this script**. Re-run when someone adds

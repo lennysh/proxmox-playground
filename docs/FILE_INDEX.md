@@ -29,10 +29,13 @@ proxmox-playground/
 │   ├── README.md
 │   ├── scripts/summarize-vzdump-log.sh
 │   └── example-logs/
-└── backup-tags/                        tag-driven backup job selection
+├── backup-tags/                        tag-driven backup job selection
+│   ├── README.md
+│   ├── scripts/sync-backup-job-from-tags.py
+│   └── examples/tag-backup.conf
+└── guest-tags/                         add tags to VMs and CTs
     ├── README.md
-    ├── scripts/sync-backup-job-from-tags.py
-    └── examples/tag-backup.conf
+    └── scripts/add-guest-tag.sh
 ```
 
 ---
@@ -124,6 +127,24 @@ cd backup-tags
 
 ---
 
+## guest-tags
+
+**Location:** `guest-tags/`  
+**README:** [guest-tags/README.md](../guest-tags/README.md)
+
+| File | Purpose |
+|------|---------|
+| `scripts/add-guest-tag.sh` | Add a tag to a QEMU VM or LXC (detects type; merges tags) |
+
+**Quick start:**
+```bash
+cd guest-tags
+sudo ./scripts/add-guest-tag.sh -v 100 -t no-backup -d
+sudo ./scripts/add-guest-tag.sh -v 100 -t no-backup
+```
+
+---
+
 ## Quick paths by goal
 
 | Goal | Start here |
@@ -132,6 +153,7 @@ cd backup-tags
 | Import a VM disk image | `vm-import/README.md` |
 | Review a vzdump log | `backup-summary/README.md` |
 | Tag-based backup job membership | `backup-tags/README.md` |
+| Add a tag to a VM or CT | `guest-tags/README.md` |
 | Add a new collection | `CONTRIBUTING.md` |
 | Repo overview | `README.md` or `docs/PROJECT_SUMMARY.md` |
 
@@ -147,6 +169,7 @@ cd backup-tags
 | `import-qcow2-zfs.sh` | 405 | vm-import |
 | `summarize-vzdump-log.sh` | 167 | backup-summary |
 | `sync-backup-job-from-tags.py` | 696 | backup-tags |
+| `add-guest-tag.sh` | 272 | guest-tags |
 
 ---
 
