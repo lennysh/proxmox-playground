@@ -25,10 +25,14 @@ proxmox-playground/
 ├── vm-import/                          VM disk import
 │   ├── README.md
 │   └── scripts/import-qcow2-zfs.sh
-└── backup-summary/                     vzdump log summaries
+├── backup-summary/                     vzdump log summaries
+│   ├── README.md
+│   ├── scripts/summarize-vzdump-log.sh
+│   └── example-logs/
+└── backup-tags/                        tag-driven backup job selection
     ├── README.md
-    ├── scripts/summarize-vzdump-log.sh
-    └── example-logs/
+    ├── scripts/sync-backup-job-from-tags.py
+    └── examples/tag-backup.conf
 ```
 
 ---
@@ -101,6 +105,25 @@ cd backup-summary
 
 ---
 
+## backup-tags
+
+**Location:** `backup-tags/`  
+**README:** [backup-tags/README.md](../backup-tags/README.md)
+
+| File | Purpose |
+|------|---------|
+| `scripts/sync-backup-job-from-tags.py` | Classify cluster guests by tag; rewrite a vzdump job |
+| `examples/tag-backup.conf` | API, job, and tag-name defaults |
+
+**Quick start:**
+```bash
+cd backup-tags
+./scripts/sync-backup-job-from-tags.py --list-jobs
+./scripts/sync-backup-job-from-tags.py --job-id YOUR-JOB-ID
+```
+
+---
+
 ## Quick paths by goal
 
 | Goal | Start here |
@@ -108,6 +131,7 @@ cd backup-summary
 | Docker storage in LXC | `docker-zvol/README.md` |
 | Import a VM disk image | `vm-import/README.md` |
 | Review a vzdump log | `backup-summary/README.md` |
+| Tag-based backup job membership | `backup-tags/README.md` |
 | Add a new collection | `CONTRIBUTING.md` |
 | Repo overview | `README.md` or `docs/PROJECT_SUMMARY.md` |
 
@@ -122,7 +146,8 @@ cd backup-summary
 | `zvol-utilities.sh` | 451 | docker-zvol |
 | `import-qcow2-zfs.sh` | 405 | vm-import |
 | `summarize-vzdump-log.sh` | 167 | backup-summary |
+| `sync-backup-job-from-tags.py` | 696 | backup-tags |
 
 ---
 
-**Last Updated**: 2026-06-26
+**Last Updated**: 2026-10-04

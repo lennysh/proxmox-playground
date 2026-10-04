@@ -11,6 +11,7 @@ Bash scripts and utilities for Proxmox administration. Each collection is self-c
 | [docker-zvol](docker-zvol/) | ZFS zvol storage for Docker in LXC containers | [README](docker-zvol/README.md) · [Guide](docker-zvol/docs/DOCKER_ZVOL_MANAGEMENT.md) · [Quick ref](docker-zvol/docs/QUICK_REFERENCE.sh) |
 | [vm-import](vm-import/) | Import qcow2/raw/vmdk disks into Proxmox VMs on ZFS | [README](vm-import/README.md) |
 | [backup-summary](backup-summary/) | Summarize vzdump task logs for failures and incomplete jobs | [README](backup-summary/README.md) |
+| [backup-tags](backup-tags/) | Rewrite a cluster backup job from VM/CT tags (opt-out + mode) | [README](backup-tags/README.md) |
 
 Pick a collection, open its README, and follow the quick start there.
 
@@ -25,7 +26,8 @@ proxmox-playground/
 │   └── PROJECT_SUMMARY.md # Collections overview
 ├── docker-zvol/
 ├── vm-import/
-└── backup-summary/
+├── backup-summary/
+└── backup-tags/
 ```
 
 ## Other documentation

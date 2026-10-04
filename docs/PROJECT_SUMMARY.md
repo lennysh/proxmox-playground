@@ -9,6 +9,7 @@ Overview of the script collections in this repository.
 | [docker-zvol](../docker-zvol/) | ZFS zvol storage for Docker in LXC containers | `setup-docker-zvol.sh`, `manage-docker-zvols.sh`, `zvol-utilities.sh` |
 | [vm-import](../vm-import/) | Import qcow2/raw/vmdk disks into Proxmox VMs on ZFS | `import-qcow2-zfs.sh` |
 | [backup-summary](../backup-summary/) | Summarize vzdump task logs (failures, incomplete jobs) | `summarize-vzdump-log.sh` |
+| [backup-tags](../backup-tags/) | Rewrite a cluster vzdump job from VM/CT tags | `sync-backup-job-from-tags.py` |
 
 Each collection is self-contained with its own README, scripts, and (where applicable) examples and docs.
 
@@ -23,7 +24,8 @@ proxmox-playground/
 │   └── PROJECT_SUMMARY.md    # This file
 ├── docker-zvol/              # Docker zvol management
 ├── vm-import/                # VM disk import
-└── backup-summary/           # vzdump log summaries
+├── backup-summary/           # vzdump log summaries
+└── backup-tags/              # tag-driven backup job selection
 ```
 
 ## Quick links
@@ -49,6 +51,13 @@ proxmox-playground/
 - Parse Proxmox vzdump task logs for failed or incomplete backups.
 - `--errors-only` for compact output; exit code 2 when problems are found.
 
+### backup-tags highlights
+
+- Cluster-wide guest list and tags from `GET /cluster/resources` (any node).
+- Default policy: back up every VM/CT unless tagged `no-backup`.
+- Optional mode tags (`backup-snapshot` / `backup-suspend` / `backup-stop`);
+  default mode is snapshot. One vzdump mode per job.
+
 ## Shared conventions
 
 All collections follow the same patterns where applicable:
@@ -60,4 +69,4 @@ All collections follow the same patterns where applicable:
 
 ---
 
-**Last Updated**: 2026-06-26
+**Last Updated**: 2026-10-04
